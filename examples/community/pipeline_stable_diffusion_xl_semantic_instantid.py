@@ -366,7 +366,7 @@ EXAMPLE_DOC_STRING = """
         >>> from PIL import Image
 
         >>> from insightface.app import FaceAnalysis
-        >>> from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLInstantIDPipeline, draw_kps
+        >>> from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLSemanticInstantIDPipeline, draw_kps
 
         >>> # download 'antelopev2' under ./models
         >>> app = FaceAnalysis(name='antelopev2', root='./', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
@@ -379,7 +379,7 @@ EXAMPLE_DOC_STRING = """
         >>> # load IdentityNet
         >>> controlnet = ControlNetModel.from_pretrained(controlnet_path, torch_dtype=torch.float16)
 
-        >>> pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
+        >>> pipe = StableDiffusionXLSemanticInstantIDPipeline.from_pretrained(
         ...     "stabilityai/stable-diffusion-xl-base-1.0", controlnet=controlnet, torch_dtype=torch.float16
         ... )
         >>> pipe.cuda()
@@ -438,7 +438,7 @@ def draw_kps(image_pil, kps, color_list=[(255, 0, 0), (0, 255, 0), (0, 0, 255), 
     return out_img_pil
 
 
-class StableDiffusionXLInstantIDPipeline(StableDiffusionXLControlNetPipeline):
+class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipeline):
     def cuda(self, dtype=torch.float16, use_xformers=False):
         self.to("cuda", dtype)
 
