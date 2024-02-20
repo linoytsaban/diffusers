@@ -537,6 +537,8 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
             negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
             lora_scale: Optional[float] = None,
             clip_skip: Optional[int] = None,
+            enable_edit_guidance: bool = False,
+            editing_prompt: Optional[str] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -714,6 +716,41 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
 
             negative_prompt_embeds = torch.concat(negative_prompt_embeds_list, dim=-1)
 
+        if enable_edit_guidance:
+            editing_prompt_2 = editing_prompt
+
+            editing_prompts = [editing_prompt, editing_prompt_2]
+            edit_prompt_embeds_list = []
+
+            for editing_prompt, tokenizer, text_encoder in zip(editing_prompts, tokenizers, text_encoders):
+                if isinstance(self, TextualInversionLoaderMixin):
+                    editing_prompt = self.maybe_convert_prompt(editing_prompt, tokenizer)
+
+                max_length = prompt_embeds.shape[1]
+                edit_concepts_input = tokenizer(
+                    # [x for item in editing_prompt for x in repeat(item, batch_size)],
+                    editing_prompt,
+                    padding="max_length",
+                    max_length=max_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+
+                edit_concepts_embeds = text_encoder(
+                    edit_concepts_input.input_ids.to(device),
+                    output_hidden_states=True,
+                )
+                # We are only ALWAYS interested in the pooled output of the final text encoder
+                edit_pooled_prompt_embeds = edit_concepts_embeds[0]
+                edit_concepts_embeds = edit_concepts_embeds.hidden_states[-2]
+
+                edit_prompt_embeds_list.append(edit_concepts_embeds)
+
+            edit_concepts_embeds = torch.concat(edit_prompt_embeds_list, dim=-1)
+        else:
+            edit_concepts_embeds = None
+            edit_pooled_prompt_embeds = None
+
         if self.text_encoder_2 is not None:
             prompt_embeds = prompt_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
         else:
@@ -736,12 +773,26 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
             negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
             negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
 
+        if enable_edit_guidance:
+            bs_embed_edit, seq_len, _ = edit_concepts_embeds.shape
+            if self.text_encoder_2 is not None:
+                edit_concepts_embeds = edit_concepts_embeds.to(dtype=self.text_encoder_2.dtype, device=device)
+            else:
+                edit_concepts_embeds = edit_concepts_embeds.to(dtype=self.unet.dtype, device=device)
+
+            edit_concepts_embeds = edit_concepts_embeds.repeat(1, num_images_per_prompt, 1)
+            edit_concepts_embeds = edit_concepts_embeds.view(bs_embed_edit * num_images_per_prompt, seq_len, -1)
+
         pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
             bs_embed * num_images_per_prompt, -1
         )
         if do_classifier_free_guidance:
             negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
                 bs_embed * num_images_per_prompt, -1
+            )
+        if enable_edit_guidance:
+            edit_pooled_prompt_embeds = edit_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
+                bs_embed_edit * num_images_per_prompt, -1
             )
 
         if self.text_encoder is not None:
@@ -754,7 +805,8 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
                 # Retrieve the original scale by scaling back the LoRA layers
                 unscale_lora_layers(self.text_encoder_2, lora_scale)
 
-        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+        return (prompt_embeds, negative_prompt_embeds, edit_concepts_embeds, pooled_prompt_embeds,
+                negative_pooled_prompt_embeds, edit_pooled_prompt_embeds)
 
     def _encode_prompt_image_emb(self, prompt_image_emb, device, dtype, do_classifier_free_guidance):
         if isinstance(prompt_image_emb, torch.Tensor):
