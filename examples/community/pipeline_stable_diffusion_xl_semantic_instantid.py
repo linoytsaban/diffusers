@@ -366,7 +366,7 @@ EXAMPLE_DOC_STRING = """
         >>> from PIL import Image
 
         >>> from insightface.app import FaceAnalysis
-        >>> from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLSemanticInstantIDPipeline, draw_kps
+        >>> from pipeline_stable_diffusion_xl_semantic_instantid import StableDiffusionXLSemanticInstantIDPipeline, draw_kps
 
         >>> # download 'antelopev2' under ./models
         >>> app = FaceAnalysis(name='antelopev2', root='./', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
