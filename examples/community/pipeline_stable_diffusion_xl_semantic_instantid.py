@@ -819,7 +819,8 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
         return (prompt_embeds, negative_prompt_embeds, edit_concepts_embeds, pooled_prompt_embeds,
                 negative_pooled_prompt_embeds, edit_pooled_prompt_embeds)
 
-    def _encode_prompt_image_emb(self, prompt_image_emb, device, dtype, do_classifier_free_guidance):
+    def _encode_prompt_image_emb(self, prompt_image_emb, device, dtype, do_classifier_free_guidance,
+                                 enable_edit_guidance=False):
         if isinstance(prompt_image_emb, torch.Tensor):
             prompt_image_emb = prompt_image_emb.clone().detach()
         else:
@@ -828,7 +829,10 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
         prompt_image_emb = prompt_image_emb.to(device=device, dtype=dtype)
         prompt_image_emb = prompt_image_emb.reshape([1, -1, self.image_proj_model_in_features])
 
-        if do_classifier_free_guidance:
+        if enable_edit_guidance:
+            prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb, prompt_image_emb],
+                                         dim=0)
+        elif do_classifier_free_guidance:
             prompt_image_emb = torch.cat([torch.zeros_like(prompt_image_emb), prompt_image_emb], dim=0)
         else:
             prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
@@ -1152,7 +1156,7 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
 
         # 3.2 Encode image prompt
         prompt_image_emb = self._encode_prompt_image_emb(
-            image_embeds, device, self.unet.dtype, self.do_classifier_free_guidance
+            image_embeds, device, self.unet.dtype, self.do_classifier_free_guidance, enable_edit_guidance
         )
         bs_embed, seq_len, _ = prompt_image_emb.shape
         prompt_image_emb = prompt_image_emb.repeat(1, num_images_per_prompt, 1)
@@ -1266,16 +1270,27 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
             negative_add_time_ids = add_time_ids
 
         if enable_edit_guidance:
-            prompt_embeds = torch.cat([prompt_embeds, edit_prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([add_text_embeds, pooled_edit_embeds], dim=0)
+            print("HI")
+            # prompt_embeds = torch.cat([prompt_embeds, edit_prompt_embeds], dim=0)
+            # add_text_embeds = torch.cat([add_text_embeds, pooled_edit_embeds], dim=0)
+            # edit_concepts_time_ids = add_time_ids.repeat(edit_prompt_embeds.shape[0], 1)
+            # add_time_ids = torch.cat([add_time_ids, edit_concepts_time_ids], dim=0)
+            # print(prompt_embeds.shape)
+            # print(prompt_image_emb.shape)
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds, edit_prompt_embeds], dim=0)
+            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds, pooled_edit_embeds], dim=0)
             edit_concepts_time_ids = add_time_ids.repeat(edit_prompt_embeds.shape[0], 1)
-            add_time_ids = torch.cat([add_time_ids, edit_concepts_time_ids], dim=0)
+            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids, edit_concepts_time_ids], dim=0)
+
 
         elif self.do_classifier_free_guidance:
+            print("HI2")
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
             add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
 
+        print(prompt_embeds.shape)
+        print(prompt_image_emb.shape)
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
         add_time_ids = add_time_ids.to(device).repeat(batch_size * num_images_per_prompt, 1)
@@ -1301,24 +1316,30 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
                 if (is_unet_compiled and is_controlnet_compiled) and is_torch_higher_equal_2_1:
                     torch._inductor.cudagraph_mark_step_begin()
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * (2 + enabled_editing_prompts)) if self.do_classifier_free_guidance else latents
+                latent_model_input = torch.cat(
+                    [latents] * (2 + enabled_editing_prompts)) if self.do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
 
                 # controlnet(s) inference
-                if guess_mode and self.do_classifier_free_guidance:
+                if guess_mode and (self.do_classifier_free_guidance or enable_edit_guidance):
+                    # print("HI3", editing_prompt, self.do_classifier_free_guidance)
                     # Infer ControlNet only for the conditional batch.
                     control_model_input = latents
                     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
-                    controlnet_prompt_embeds = prompt_embeds.chunk(2)[1]
+                    controlnet_prompt_embeds = prompt_embeds.chunk(2 + enable_edit_guidance)[1]
                     controlnet_added_cond_kwargs = {
-                        "text_embeds": add_text_embeds.chunk(2)[1],
-                        "time_ids": add_time_ids.chunk(2)[1],
+                        "text_embeds": add_text_embeds.chunk(2 + enable_edit_guidance)[1],
+                        "time_ids": add_time_ids.chunk(2 + enable_edit_guidance)[1],
                     }
                 else:
+                    # print("HI4", editing_prompt, self.do_classifier_free_guidance)
+                    print(latent_model_input.shape)
                     control_model_input = latent_model_input
+                    print(prompt_embeds.shape)
                     controlnet_prompt_embeds = prompt_embeds
+                    print(added_cond_kwargs["text_embeds"].shape)
                     controlnet_added_cond_kwargs = added_cond_kwargs
 
                 if isinstance(controlnet_keep[i], list):
