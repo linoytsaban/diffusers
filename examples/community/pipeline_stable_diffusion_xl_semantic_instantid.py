@@ -28,9 +28,20 @@ from diffusers.models import ControlNetModel
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 from diffusers.pipelines.stable_diffusion_xl import StableDiffusionXLPipelineOutput
 from diffusers.utils import (
+    USE_PEFT_BACKEND,
+    is_invisible_watermark_available,
+    is_torch_xla_available,
+    scale_lora_layers,
+    unscale_lora_layers,
     deprecate,
     logging,
     replace_example_docstring,
+)
+from diffusers.loaders import (
+    FromSingleFileMixin,
+    IPAdapterMixin,
+    StableDiffusionXLLoraLoaderMixin,
+    TextualInversionLoaderMixin,
 )
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module, is_torch_version
@@ -1115,12 +1126,12 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
         text_encoder_lora_scale = (
             self.cross_attention_kwargs.get("scale", None) if self.cross_attention_kwargs is not None else None
         )
-        (
-            prompt_embeds,
+        (prompt_embeds,
+            negative_prompt_embeds,
             edit_prompt_embeds,
+            pooled_prompt_embeds,
             negative_pooled_prompt_embeds,
             pooled_edit_embeds,
-            num_edit_tokens,
         ) = self.encode_prompt(
             prompt,
             prompt_2,
@@ -1255,11 +1266,10 @@ class StableDiffusionXLSemanticInstantIDPipeline(StableDiffusionXLControlNetPipe
             negative_add_time_ids = add_time_ids
 
         if enable_edit_guidance:
-
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds, edit_prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds, pooled_edit_embeds], dim=0)
-            edit_concepts_time_ids = add_time_ids.repeat(edit_prompt_embeds.shape[0], add_time_ids.shape[0])
-            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids, edit_concepts_time_ids], dim=0)
+            prompt_embeds = torch.cat([prompt_embeds, edit_prompt_embeds], dim=0)
+            add_text_embeds = torch.cat([add_text_embeds, pooled_edit_embeds], dim=0)
+            edit_concepts_time_ids = add_time_ids.repeat(edit_prompt_embeds.shape[0], 1)
+            add_time_ids = torch.cat([add_time_ids, edit_concepts_time_ids], dim=0)
 
         elif self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
