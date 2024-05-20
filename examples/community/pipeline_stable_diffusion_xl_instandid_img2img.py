@@ -251,14 +251,13 @@ class IPAttnProcessor(nn.Module):
             The context length of the image features.
     """
 
-    def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4, skip=False):
+    def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4):
         super().__init__()
 
         self.hidden_size = hidden_size
         self.cross_attention_dim = cross_attention_dim
         self.scale = scale
         self.num_tokens = num_tokens
-        self.skip = skip
 
         self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
@@ -311,24 +310,28 @@ class IPAttnProcessor(nn.Module):
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
 
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        hidden_states = torch.bmm(attention_probs, value)
+        if xformers_available:
+            hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
+        else:
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
         hidden_states = attn.batch_to_head_dim(hidden_states)
 
-        if not self.skip:
-            # for ip-adapter
-            ip_key = self.to_k_ip(ip_hidden_states)
-            ip_value = self.to_v_ip(ip_hidden_states)
+        # for ip-adapter
+        ip_key = self.to_k_ip(ip_hidden_states)
+        ip_value = self.to_v_ip(ip_hidden_states)
 
-            ip_key = attn.head_to_batch_dim(ip_key)
-            ip_value = attn.head_to_batch_dim(ip_value)
+        ip_key = attn.head_to_batch_dim(ip_key)
+        ip_value = attn.head_to_batch_dim(ip_value)
 
+        if xformers_available:
+            ip_hidden_states = self._memory_efficient_attention_xformers(query, ip_key, ip_value, None)
+        else:
             ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
-            self.attn_map = ip_attention_probs
             ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
-            ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
+        ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
 
-            hidden_states = hidden_states + self.scale * ip_hidden_states
+        hidden_states = hidden_states + self.scale * ip_hidden_states
 
         # linear proj
         hidden_states = attn.to_out[0](hidden_states)
