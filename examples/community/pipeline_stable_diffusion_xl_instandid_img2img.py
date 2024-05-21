@@ -31,10 +31,27 @@ from diffusers.utils import (
     deprecate,
     logging,
     replace_example_docstring,
+    USE_PEFT_BACKEND,
+    _get_model_file,
+    is_accelerate_available,
+    is_torch_version,
+    is_transformers_available,
 )
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module, is_torch_version
 
+from diffusers.models.modeling_utils import _LOW_CPU_MEM_USAGE_DEFAULT, load_state_dict
+
+if is_transformers_available():
+    from transformers import (
+        CLIPImageProcessor,
+        CLIPVisionModelWithProjection,
+    )
+
+    from diffusers.models.attention_processor import (
+        IPAdapterAttnProcessor,
+        IPAdapterAttnProcessor2_0,
+    )
 
 try:
     import xformers
@@ -76,7 +93,7 @@ def reshape_tensor(x, heads):
 class PerceiverAttention(nn.Module):
     def __init__(self, *, dim, dim_head=64, heads=8):
         super().__init__()
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** -0.5
         self.dim_head = dim_head
         self.heads = heads
         inner_dim = dim_head * heads
@@ -122,19 +139,19 @@ class PerceiverAttention(nn.Module):
 
 class Resampler(nn.Module):
     def __init__(
-        self,
-        dim=1024,
-        depth=8,
-        dim_head=64,
-        heads=16,
-        num_queries=8,
-        embedding_dim=768,
-        output_dim=1024,
-        ff_mult=4,
+            self,
+            dim=1024,
+            depth=8,
+            dim_head=64,
+            heads=16,
+            num_queries=8,
+            embedding_dim=768,
+            output_dim=1024,
+            ff_mult=4,
     ):
         super().__init__()
 
-        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
+        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim ** 0.5)
 
         self.proj_in = nn.Linear(embedding_dim, dim)
 
@@ -170,19 +187,19 @@ class AttnProcessor(nn.Module):
     """
 
     def __init__(
-        self,
-        hidden_size=None,
-        cross_attention_dim=None,
+            self,
+            hidden_size=None,
+            cross_attention_dim=None,
     ):
         super().__init__()
 
     def __call__(
-        self,
-        attn,
-        hidden_states,
-        encoder_hidden_states=None,
-        attention_mask=None,
-        temb=None,
+            self,
+            attn,
+            hidden_states,
+            encoder_hidden_states=None,
+            attention_mask=None,
+            temb=None,
     ):
         residual = hidden_states
 
@@ -263,12 +280,12 @@ class IPAttnProcessor(nn.Module):
         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
 
     def __call__(
-        self,
-        attn,
-        hidden_states,
-        encoder_hidden_states=None,
-        attention_mask=None,
-        temb=None,
+            self,
+            attn,
+            hidden_states,
+            encoder_hidden_states=None,
+            attention_mask=None,
+            temb=None,
     ):
         residual = hidden_states
 
@@ -464,9 +481,207 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             else:
                 raise ValueError("xformers is not available. Make sure it is installed correctly")
 
-    def load_ip_adapter_instantid(self, model_ckpt, image_emb_dim=512, num_tokens=16, scale=0.5):
-        self.set_image_proj_model(model_ckpt, image_emb_dim, num_tokens)
-        self.set_ip_adapter(model_ckpt, num_tokens, scale)
+    # def load_ip_adapter_instantid(self, model_ckpt, image_emb_dim=512, num_tokens=16, scale=0.5):
+    #     self.set_image_proj_model(model_ckpt, image_emb_dim, num_tokens)
+    #     self.set_ip_adapter(model_ckpt, num_tokens, scale)
+
+    def load_ip_adapter(
+            self,
+            pretrained_model_name_or_path_or_dict: Union[str, List[str], Dict[str, torch.Tensor]],
+            subfolder: Union[str, List[str]],
+            weight_name: Union[str, List[str]],
+            is_face_adapter: Union[bool, List[bool]],
+            image_encoder_folder: Optional[str] = "image_encoder",
+
+            **kwargs,
+    ):
+        """
+        Parameters:
+            pretrained_model_name_or_path_or_dict (`str` or `List[str]` or `os.PathLike` or `List[os.PathLike]` or `dict` or `List[dict]`):
+                Can be either:
+
+                    - A string, the *model id* (for example `google/ddpm-celebahq-256`) of a pretrained model hosted on
+                      the Hub.
+                    - A path to a *directory* (for example `./my_model_directory`) containing the model weights saved
+                      with [`ModelMixin.save_pretrained`].
+                    - A [torch state
+                      dict](https://pytorch.org/tutorials/beginner/saving_loading_models.html#what-is-a-state-dict).
+            subfolder (`str` or `List[str]`):
+                The subfolder location of a model file within a larger model repository on the Hub or locally. If a
+                list is passed, it should have the same length as `weight_name`.
+            weight_name (`str` or `List[str]`):
+                The name of the weight file to load. If a list is passed, it should have the same length as
+                `weight_name`.
+            image_encoder_folder (`str`, *optional*, defaults to `image_encoder`):
+                The subfolder location of the image encoder within a larger model repository on the Hub or locally.
+                Pass `None` to not load the image encoder. If the image encoder is located in a folder inside
+                `subfolder`, you only need to pass the name of the folder that contains image encoder weights, e.g.
+                `image_encoder_folder="image_encoder"`. If the image encoder is located in a folder other than
+                `subfolder`, you should pass the path to the folder that contains image encoder weights, for example,
+                `image_encoder_folder="different_subfolder/image_encoder"`.
+            cache_dir (`Union[str, os.PathLike]`, *optional*):
+                Path to a directory where a downloaded pretrained model configuration is cached if the standard cache
+                is not used.
+            force_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
+                cached versions if they exist.
+            resume_download (`bool`, *optional*, defaults to `False`):
+                Whether or not to resume downloading the model weights and configuration files. If set to `False`, any
+                incompletely downloaded files are deleted.
+            proxies (`Dict[str, str]`, *optional*):
+                A dictionary of proxy servers to use by protocol or endpoint, for example, `{'http': 'foo.bar:3128',
+                'http://hostname': 'foo.bar:4012'}`. The proxies are used on each request.
+            local_files_only (`bool`, *optional*, defaults to `False`):
+                Whether to only load local model weights and configuration files or not. If set to `True`, the model
+                won't be downloaded from the Hub.
+            token (`str` or *bool*, *optional*):
+                The token to use as HTTP bearer authorization for remote files. If `True`, the token generated from
+                `diffusers-cli login` (stored in `~/.huggingface`) is used.
+            revision (`str`, *optional*, defaults to `"main"`):
+                The specific model version to use. It can be a branch name, a tag name, a commit id, or any identifier
+                allowed by Git.
+            low_cpu_mem_usage (`bool`, *optional*, defaults to `True` if torch version >= 1.9.0 else `False`):
+                Speed up model loading only loading the pretrained weights and not initializing the weights. This also
+                tries to not use more than 1x model size in CPU memory (including peak memory) while loading the model.
+                Only supported for PyTorch >= 1.9.0. If you are using an older version of PyTorch, setting this
+                argument to `True` will raise an error.
+        """
+
+        # handle the list inputs for multiple IP Adapters
+        if not isinstance(weight_name, list):
+            weight_name = [weight_name]
+
+        if not isinstance(is_face_adapter, list):
+            is_face_adapter = [is_face_adapter]
+
+        if not isinstance(pretrained_model_name_or_path_or_dict, list):
+            pretrained_model_name_or_path_or_dict = [pretrained_model_name_or_path_or_dict]
+        if len(pretrained_model_name_or_path_or_dict) == 1:
+            pretrained_model_name_or_path_or_dict = pretrained_model_name_or_path_or_dict * len(weight_name)
+
+        if not isinstance(subfolder, list):
+            subfolder = [subfolder]
+        if len(subfolder) == 1:
+            subfolder = subfolder * len(weight_name)
+
+        if len(weight_name) != len(pretrained_model_name_or_path_or_dict):
+            raise ValueError("`weight_name` and `pretrained_model_name_or_path_or_dict` must have the same length.")
+
+        if len(weight_name) != len(subfolder):
+            raise ValueError("`weight_name` and `subfolder` must have the same length.")
+
+        # Load the main state dict first.
+        cache_dir = kwargs.pop("cache_dir", None)
+        force_download = kwargs.pop("force_download", False)
+        resume_download = kwargs.pop("resume_download", False)
+        proxies = kwargs.pop("proxies", None)
+        local_files_only = kwargs.pop("local_files_only", None)
+        token = kwargs.pop("token", None)
+        revision = kwargs.pop("revision", None)
+        low_cpu_mem_usage = kwargs.pop("low_cpu_mem_usage", _LOW_CPU_MEM_USAGE_DEFAULT)
+
+        if low_cpu_mem_usage and not is_accelerate_available():
+            low_cpu_mem_usage = False
+            logger.warning(
+                "Cannot initialize model with low cpu memory usage because `accelerate` was not found in the"
+                " environment. Defaulting to `low_cpu_mem_usage=False`. It is strongly recommended to install"
+                " `accelerate` for faster and less memory-intense model loading. You can do so with: \n```\npip"
+                " install accelerate\n```\n."
+            )
+
+        if low_cpu_mem_usage is True and not is_torch_version(">=", "1.9.0"):
+            raise NotImplementedError(
+                "Low memory initialization requires torch >= 1.9.0. Please either update your PyTorch version or set"
+                " `low_cpu_mem_usage=False`."
+            )
+
+        user_agent = {
+            "file_type": "attn_procs_weights",
+            "framework": "pytorch",
+        }
+        state_dicts = []
+        for pretrained_model_name_or_path_or_dict, weight_name, subfolder, is_face_adapter in zip(
+                pretrained_model_name_or_path_or_dict, weight_name, subfolder, is_face_adapter
+        ):
+            if not isinstance(pretrained_model_name_or_path_or_dict, dict):
+                model_file = _get_model_file(
+                    pretrained_model_name_or_path_or_dict,
+                    weights_name=weight_name,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    proxies=proxies,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                    user_agent=user_agent,
+                )
+                if weight_name.endswith(".safetensors"):
+                    state_dict = {"image_proj": {}, "ip_adapter": {}}
+                    with safe_open(model_file, framework="pt", device="cpu") as f:
+                        for key in f.keys():
+                            if key.startswith("image_proj."):
+                                state_dict["image_proj"][key.replace("image_proj.", "")] = f.get_tensor(key)
+                            elif key.startswith("ip_adapter."):
+                                state_dict["ip_adapter"][key.replace("ip_adapter.", "")] = f.get_tensor(key)
+                else:
+                    state_dict = load_state_dict(model_file)
+            else:
+                state_dict = pretrained_model_name_or_path_or_dict
+
+            keys = list(state_dict.keys())
+            if keys != ["image_proj", "ip_adapter"] and not is_face_adapter:
+                raise ValueError("Required keys are (`image_proj` and `ip_adapter`) missing from the state dict.")
+
+            state_dicts.append(state_dict)
+
+            # load CLIP image encoder here if it has not been registered to the pipeline yet
+            if hasattr(self, "image_encoder") and getattr(self, "image_encoder", None) is None:
+                if image_encoder_folder is not None:
+                    if not isinstance(pretrained_model_name_or_path_or_dict, dict):
+                        logger.info(f"loading image_encoder from {pretrained_model_name_or_path_or_dict}")
+                        if image_encoder_folder.count("/") == 0:
+                            image_encoder_subfolder = Path(subfolder, image_encoder_folder).as_posix()
+                        else:
+                            image_encoder_subfolder = Path(image_encoder_folder).as_posix()
+
+                        image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+                            pretrained_model_name_or_path_or_dict,
+                            subfolder=image_encoder_subfolder,
+                            low_cpu_mem_usage=low_cpu_mem_usage,
+                        ).to(self.device, dtype=self.dtype)
+                        self.register_modules(image_encoder=image_encoder)
+                    else:
+                        raise ValueError(
+                            "`image_encoder` cannot be loaded because `pretrained_model_name_or_path_or_dict` is a state dict."
+                        )
+                else:
+                    logger.warning(
+                        "image_encoder is not loaded since `image_encoder_folder=None` passed. You will not be able to use `ip_adapter_image` when calling the pipeline with IP-Adapter."
+                        "Use `ip_adapter_image_embeds` to pass pre-generated image embedding instead."
+                    )
+
+            # create feature extractor if it has not been registered to the pipeline yet
+            if hasattr(self, "feature_extractor") and getattr(self, "feature_extractor", None) is None:
+                feature_extractor = CLIPImageProcessor()
+                self.register_modules(feature_extractor=feature_extractor)
+
+        # load ip-adapter into unet
+        unet = getattr(self, self.unet_name) if not hasattr(self, "unet") else self.unet
+        unet._load_ip_adapter_weights(state_dicts, low_cpu_mem_usage=low_cpu_mem_usage)
+
+        extra_loras = unet._load_ip_adapter_loras(state_dicts)
+        if extra_loras != {}:
+            if not USE_PEFT_BACKEND:
+                logger.warning("PEFT backend is required to load these weights.")
+            else:
+                # apply the IP Adapter Face ID LoRA weights
+                peft_config = getattr(unet, "peft_config", {})
+                for k, lora in extra_loras.items():
+                    if f"faceid_{k}" not in peft_config:
+                        self.load_lora_weights(lora, adapter_name=f"faceid_{k}")
+                        self.set_adapters([f"faceid_{k}"], adapter_weights=[1.0])
 
     def set_image_proj_model(self, model_ckpt, image_emb_dim=512, num_tokens=16):
         image_proj_model = Resampler(
@@ -483,48 +698,49 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         image_proj_model.eval()
 
         self.image_proj_model = image_proj_model.to(self.device, dtype=self.dtype)
-        state_dict = torch.load(model_ckpt, map_location="cpu")
+        #state_dict = torch.load(model_ckpt, map_location="cpu")
+        state_dict = load_state_dict(model_ckpt)
         if "image_proj" in state_dict:
             state_dict = state_dict["image_proj"]
         self.image_proj_model.load_state_dict(state_dict)
 
         self.image_proj_model_in_features = image_emb_dim
 
-    def set_ip_adapter(self, model_ckpt, num_tokens, scale):
-        unet = self.unet
-        attn_procs = {}
-        for name in unet.attn_processors.keys():
-            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if name.startswith("mid_block"):
-                hidden_size = unet.config.block_out_channels[-1]
-            elif name.startswith("up_blocks"):
-                block_id = int(name[len("up_blocks.")])
-                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            elif name.startswith("down_blocks"):
-                block_id = int(name[len("down_blocks.")])
-                hidden_size = unet.config.block_out_channels[block_id]
-            if cross_attention_dim is None:
-                attn_procs[name] = AttnProcessor().to(unet.device, dtype=unet.dtype)
-            else:
-                attn_procs[name] = IPAttnProcessor(
-                    hidden_size=hidden_size,
-                    cross_attention_dim=cross_attention_dim,
-                    scale=scale,
-                    num_tokens=num_tokens,
-                ).to(unet.device, dtype=unet.dtype)
-        unet.set_attn_processor(attn_procs)
-
-        state_dict = torch.load(model_ckpt, map_location="cpu")
-        ip_layers = torch.nn.ModuleList(self.unet.attn_processors.values())
-        if "ip_adapter" in state_dict:
-            state_dict = state_dict["ip_adapter"]
-        ip_layers.load_state_dict(state_dict)
-
-    def set_ip_adapter_scale(self, scale):
-        unet = getattr(self, self.unet_name) if not hasattr(self, "unet") else self.unet
-        for attn_processor in unet.attn_processors.values():
-            if isinstance(attn_processor, IPAttnProcessor):
-                attn_processor.scale = scale
+    # def set_ip_adapter(self, model_ckpt, num_tokens, scale):
+    #     unet = self.unet
+    #     attn_procs = {}
+    #     for name in unet.attn_processors.keys():
+    #         cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+    #         if name.startswith("mid_block"):
+    #             hidden_size = unet.config.block_out_channels[-1]
+    #         elif name.startswith("up_blocks"):
+    #             block_id = int(name[len("up_blocks.")])
+    #             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+    #         elif name.startswith("down_blocks"):
+    #             block_id = int(name[len("down_blocks.")])
+    #             hidden_size = unet.config.block_out_channels[block_id]
+    #         if cross_attention_dim is None:
+    #             attn_procs[name] = AttnProcessor().to(unet.device, dtype=unet.dtype)
+    #         else:
+    #             attn_procs[name] = IPAttnProcessor(
+    #                 hidden_size=hidden_size,
+    #                 cross_attention_dim=cross_attention_dim,
+    #                 scale=scale,
+    #                 num_tokens=num_tokens,
+    #             ).to(unet.device, dtype=unet.dtype)
+    #     unet.set_attn_processor(attn_procs)
+    #
+    #     state_dict = torch.load(model_ckpt, map_location="cpu") ## diff from instantstyle
+    #     ip_layers = torch.nn.ModuleList(self.unet.attn_processors.values())
+    #     if "ip_adapter" in state_dict:
+    #         state_dict = state_dict["ip_adapter"]
+    #     ip_layers.load_state_dict(state_dict)
+    #
+    # def set_ip_adapter_scale(self, scale):
+    #     unet = getattr(self, self.unet_name) if not hasattr(self, "unet") else self.unet
+    #     for attn_processor in unet.attn_processors.values():
+    #         if isinstance(attn_processor, IPAttnProcessor):
+    #             attn_processor.scale = scale
 
     def _encode_prompt_image_emb(self, prompt_image_emb, device, dtype, do_classifier_free_guidance):
         if isinstance(prompt_image_emb, torch.Tensor):
@@ -546,46 +762,46 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-        self,
-        prompt: Union[str, List[str]] = None,
-        prompt_2: Optional[Union[str, List[str]]] = None,
-        image: PipelineImageInput = None,
-        control_image: PipelineImageInput = None,
-        strength: float = 0.8,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        negative_prompt_2: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: Optional[int] = 1,
-        eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-        image_embeds: Optional[torch.FloatTensor] = None,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
-        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-        controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
-        guess_mode: bool = False,
-        control_guidance_start: Union[float, List[float]] = 0.0,
-        control_guidance_end: Union[float, List[float]] = 1.0,
-        original_size: Tuple[int, int] = None,
-        crops_coords_top_left: Tuple[int, int] = (0, 0),
-        target_size: Tuple[int, int] = None,
-        negative_original_size: Optional[Tuple[int, int]] = None,
-        negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
-        negative_target_size: Optional[Tuple[int, int]] = None,
-        aesthetic_score: float = 6.0,
-        negative_aesthetic_score: float = 2.5,
-        clip_skip: Optional[int] = None,
-        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        **kwargs,
+            self,
+            prompt: Union[str, List[str]] = None,
+            prompt_2: Optional[Union[str, List[str]]] = None,
+            image: PipelineImageInput = None,
+            control_image: PipelineImageInput = None,
+            strength: float = 0.8,
+            height: Optional[int] = None,
+            width: Optional[int] = None,
+            num_inference_steps: int = 50,
+            guidance_scale: float = 5.0,
+            negative_prompt: Optional[Union[str, List[str]]] = None,
+            negative_prompt_2: Optional[Union[str, List[str]]] = None,
+            num_images_per_prompt: Optional[int] = 1,
+            eta: float = 0.0,
+            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+            latents: Optional[torch.FloatTensor] = None,
+            prompt_embeds: Optional[torch.FloatTensor] = None,
+            negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+            pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+            negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+            image_embeds: Optional[torch.FloatTensor] = None,
+            output_type: Optional[str] = "pil",
+            return_dict: bool = True,
+            cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+            controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
+            guess_mode: bool = False,
+            control_guidance_start: Union[float, List[float]] = 0.0,
+            control_guidance_end: Union[float, List[float]] = 1.0,
+            original_size: Tuple[int, int] = None,
+            crops_coords_top_left: Tuple[int, int] = (0, 0),
+            target_size: Tuple[int, int] = None,
+            negative_original_size: Optional[Tuple[int, int]] = None,
+            negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
+            negative_target_size: Optional[Tuple[int, int]] = None,
+            aesthetic_score: float = 6.0,
+            negative_aesthetic_score: float = 2.5,
+            clip_skip: Optional[int] = None,
+            callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+            callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+            **kwargs,
     ):
         r"""
         The call function to the pipeline for generation.
