@@ -15,7 +15,7 @@
 
 import math
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
+from pathlib import Path
 import cv2
 import numpy as np
 import PIL.Image
@@ -696,14 +696,14 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         )
 
         image_proj_model.eval()
-
+        print("HELOOO 444444", self.device)
         self.image_proj_model = image_proj_model.to(self.device, dtype=self.dtype)
         #state_dict = torch.load(model_ckpt, map_location="cpu")
         state_dict = load_state_dict(model_ckpt)
         if "image_proj" in state_dict:
             state_dict = state_dict["image_proj"]
         self.image_proj_model.load_state_dict(state_dict)
-
+        print("HELOOO 55555555", self.image_proj_model.device)
         self.image_proj_model_in_features = image_emb_dim
 
     # def set_ip_adapter(self, model_ckpt, num_tokens, scale):
@@ -756,6 +756,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         else:
             prompt_image_emb = torch.cat([prompt_image_emb], dim=0)
 
+        print(prompt_image_emb.device)
         prompt_image_emb = self.image_proj_model(prompt_image_emb)
         return prompt_image_emb
 
@@ -782,6 +783,8 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             negative_prompt_embeds: Optional[torch.FloatTensor] = None,
             pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
             negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+            ip_adapter_image: Optional[PipelineImageInput] = None,
+            ip_adapter_image_embeds: Optional[List[torch.FloatTensor]] = None,
             image_embeds: Optional[torch.FloatTensor] = None,
             output_type: Optional[str] = "pil",
             return_dict: bool = True,
@@ -1037,6 +1040,16 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             clip_skip=self.clip_skip,
         )
 
+        # 3.2 Encode ip_adapter_image
+        if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
+            image_embeds = self.prepare_ip_adapter_image_embeds(
+                ip_adapter_image,
+                ip_adapter_image_embeds,
+                device,
+                batch_size * num_images_per_prompt,
+                self.do_classifier_free_guidance,
+            )
+
         # 3.2 Encode image prompt
         prompt_image_emb = self._encode_prompt_image_emb(
             image_embeds, device, self.unet.dtype, self.do_classifier_free_guidance
@@ -1183,6 +1196,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
 
+
                 # controlnet(s) inference
                 if guess_mode and self.do_classifier_free_guidance:
                     # Infer ControlNet only for the conditional batch.
@@ -1223,6 +1237,9 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                     # add 0 to the unconditional batch to keep it unchanged.
                     down_block_res_samples = [torch.cat([torch.zeros_like(d), d]) for d in down_block_res_samples]
                     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
+
+                if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
+                    added_cond_kwargs["image_embeds"] = image_embeds
 
                 # predict the noise residual
                 noise_pred = self.unet(
