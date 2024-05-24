@@ -21,10 +21,11 @@ import numpy as np
 import PIL.Image
 import torch
 import torch.nn as nn
+from safetensors import safe_open
 
 from diffusers import StableDiffusionXLControlNetImg2ImgPipeline
 from diffusers.image_processor import PipelineImageInput
-from diffusers.models import ControlNetModel
+from diffusers.models import AutoencoderKL, ControlNetModel, ImageProjection, UNet2DConditionModel
 from diffusers.pipelines.controlnet.multicontrolnet import MultiControlNetModel
 from diffusers.pipelines.stable_diffusion_xl import StableDiffusionXLPipelineOutput
 from diffusers.utils import (
@@ -139,24 +140,38 @@ class PerceiverAttention(nn.Module):
 
 class Resampler(nn.Module):
     def __init__(
-            self,
-            dim=1024,
-            depth=8,
-            dim_head=64,
-            heads=16,
-            num_queries=8,
-            embedding_dim=768,
-            output_dim=1024,
-            ff_mult=4,
+        self,
+        dim=1024,
+        depth=8,
+        dim_head=64,
+        heads=16,
+        num_queries=8,
+        embedding_dim=768,
+        output_dim=1024,
+        ff_mult=4,
+        max_seq_len: int = 257,  # CLIP tokens + CLS token
+        apply_pos_emb: bool = False,
+        num_latents_mean_pooled: int = 0,  # number of latents derived from mean pooled representation of the sequence
     ):
         super().__init__()
+        self.pos_emb = nn.Embedding(max_seq_len, embedding_dim) if apply_pos_emb else None
 
-        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim ** 0.5)
+        self.latents = nn.Parameter(torch.randn(1, num_queries, dim) / dim**0.5)
 
         self.proj_in = nn.Linear(embedding_dim, dim)
 
         self.proj_out = nn.Linear(dim, output_dim)
         self.norm_out = nn.LayerNorm(output_dim)
+
+        self.to_latents_from_mean_pooled_seq = (
+            nn.Sequential(
+                nn.LayerNorm(dim),
+                nn.Linear(dim, dim * num_latents_mean_pooled),
+                Rearrange("b (n d) -> b n d", n=num_latents_mean_pooled),
+            )
+            if num_latents_mean_pooled > 0
+            else None
+        )
 
         self.layers = nn.ModuleList([])
         for _ in range(depth):
@@ -170,8 +185,19 @@ class Resampler(nn.Module):
             )
 
     def forward(self, x):
+        if self.pos_emb is not None:
+            n, device = x.shape[1], x.device
+            pos_emb = self.pos_emb(torch.arange(n, device=device))
+            x = x + pos_emb
+
         latents = self.latents.repeat(x.size(0), 1, 1)
+
         x = self.proj_in(x)
+
+        if self.to_latents_from_mean_pooled_seq:
+            meanpooled_seq = masked_mean(x, dim=1, mask=torch.ones(x.shape[:2], device=x.device, dtype=torch.bool))
+            meanpooled_latents = self.to_latents_from_mean_pooled_seq(meanpooled_seq)
+            latents = torch.cat((meanpooled_latents, latents), dim=-2)
 
         for attn, ff in self.layers:
             latents = attn(x, latents) + latents
@@ -254,124 +280,121 @@ class AttnProcessor(nn.Module):
         return hidden_states
 
 
-class IPAttnProcessor(nn.Module):
-    r"""
-    Attention processor for IP-Adapater.
-    Args:
-        hidden_size (`int`):
-            The hidden size of the attention layer.
-        cross_attention_dim (`int`):
-            The number of channels in the `encoder_hidden_states`.
-        scale (`float`, defaults to 1.0):
-            the weight scale of image prompt.
-        num_tokens (`int`, defaults to 4 when do ip_adapter_plus it should be 16):
-            The context length of the image features.
-    """
-
-    def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.cross_attention_dim = cross_attention_dim
-        self.scale = scale
-        self.num_tokens = num_tokens
-
-        self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-        self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-
-    def __call__(
-            self,
-            attn,
-            hidden_states,
-            encoder_hidden_states=None,
-            attention_mask=None,
-            temb=None,
-    ):
-        residual = hidden_states
-
-        if attn.spatial_norm is not None:
-            hidden_states = attn.spatial_norm(hidden_states, temb)
-
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
-        query = attn.to_q(hidden_states)
-
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
-        else:
-            # get encoder_hidden_states, ip_hidden_states
-            end_pos = encoder_hidden_states.shape[1] - self.num_tokens
-            encoder_hidden_states, ip_hidden_states = (
-                encoder_hidden_states[:, :end_pos, :],
-                encoder_hidden_states[:, end_pos:, :],
-            )
-            if attn.norm_cross:
-                encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
-
-        query = attn.head_to_batch_dim(query)
-        key = attn.head_to_batch_dim(key)
-        value = attn.head_to_batch_dim(value)
-
-        if xformers_available:
-            hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
-        else:
-            attention_probs = attn.get_attention_scores(query, key, attention_mask)
-            hidden_states = torch.bmm(attention_probs, value)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
-
-        # for ip-adapter
-        ip_key = self.to_k_ip(ip_hidden_states)
-        ip_value = self.to_v_ip(ip_hidden_states)
-
-        ip_key = attn.head_to_batch_dim(ip_key)
-        ip_value = attn.head_to_batch_dim(ip_value)
-
-        if xformers_available:
-            ip_hidden_states = self._memory_efficient_attention_xformers(query, ip_key, ip_value, None)
-        else:
-            ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
-            ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
-        ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
-
-        hidden_states = hidden_states + self.scale * ip_hidden_states
-
-        # linear proj
-        hidden_states = attn.to_out[0](hidden_states)
-        # dropout
-        hidden_states = attn.to_out[1](hidden_states)
-
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-
-        if attn.residual_connection:
-            hidden_states = hidden_states + residual
-
-        hidden_states = hidden_states / attn.rescale_output_factor
-
-        return hidden_states
-
-    def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
-        # TODO attention_mask
-        query = query.contiguous()
-        key = key.contiguous()
-        value = value.contiguous()
-        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
-        return hidden_states
+# class IPAttnProcessor(nn.Module):
+#     r"""
+#     Attention processor for IP-Adapater.
+#     Args:
+#         hidden_size (`int`):
+#             The hidden size of the attention layer.
+#         cross_attention_dim (`int`):
+#             The number of channels in the `encoder_hidden_states`.
+#         scale (`float`, defaults to 1.0):
+#             the weight scale of image prompt.
+#         num_tokens (`int`, defaults to 4 when do ip_adapter_plus it should be 16):
+#             The context length of the image features.
+#     """
+#
+#     def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4, skip=False):
+#         super().__init__()
+#
+#         self.hidden_size = hidden_size
+#         self.cross_attention_dim = cross_attention_dim
+#         self.scale = scale
+#         self.num_tokens = num_tokens
+#         self.skip = skip
+#
+#         self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
+#         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
+#
+#     def __call__(
+#         self,
+#         attn,
+#         hidden_states,
+#         encoder_hidden_states=None,
+#         attention_mask=None,
+#         temb=None,
+#     ):
+#         residual = hidden_states
+#
+#         if attn.spatial_norm is not None:
+#             hidden_states = attn.spatial_norm(hidden_states, temb)
+#
+#         input_ndim = hidden_states.ndim
+#
+#         if input_ndim == 4:
+#             batch_size, channel, height, width = hidden_states.shape
+#             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+#
+#         batch_size, sequence_length, _ = (
+#             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+#         )
+#         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+#
+#         if attn.group_norm is not None:
+#             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+#
+#         query = attn.to_q(hidden_states)
+#
+#         if encoder_hidden_states is None:
+#             encoder_hidden_states = hidden_states
+#         else:
+#             # get encoder_hidden_states, ip_hidden_states
+#             end_pos = encoder_hidden_states.shape[1] - self.num_tokens
+#             encoder_hidden_states, ip_hidden_states = (
+#                 encoder_hidden_states[:, :end_pos, :],
+#                 encoder_hidden_states[:, end_pos:, :],
+#             )
+#             if attn.norm_cross:
+#                 encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+#
+#         key = attn.to_k(encoder_hidden_states)
+#         value = attn.to_v(encoder_hidden_states)
+#
+#         query = attn.head_to_batch_dim(query)
+#         key = attn.head_to_batch_dim(key)
+#         value = attn.head_to_batch_dim(value)
+#
+#         attention_probs = attn.get_attention_scores(query, key, attention_mask)
+#         hidden_states = torch.bmm(attention_probs, value)
+#         hidden_states = attn.batch_to_head_dim(hidden_states)
+#
+#         if not self.skip:
+#             # for ip-adapter
+#             ip_key = self.to_k_ip(ip_hidden_states)
+#             ip_value = self.to_v_ip(ip_hidden_states)
+#
+#             ip_key = attn.head_to_batch_dim(ip_key)
+#             ip_value = attn.head_to_batch_dim(ip_value)
+#
+#             ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
+#             self.attn_map = ip_attention_probs
+#             ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
+#             ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
+#
+#             hidden_states = hidden_states + self.scale * ip_hidden_states
+#
+#         # linear proj
+#         hidden_states = attn.to_out[0](hidden_states)
+#         # dropout
+#         hidden_states = attn.to_out[1](hidden_states)
+#
+#         if input_ndim == 4:
+#             hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+#
+#         if attn.residual_connection:
+#             hidden_states = hidden_states + residual
+#
+#         hidden_states = hidden_states / attn.rescale_output_factor
+#
+#         return hidden_states
+#
+#     def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
+#         # TODO attention_mask
+#         query = query.contiguous()
+#         key = key.contiguous()
+#         value = value.contiguous()
+#         hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+#         return hidden_states
 
 
 EXAMPLE_DOC_STRING = """
@@ -638,7 +661,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
             # load CLIP image encoder here if it has not been registered to the pipeline yet
             if hasattr(self, "image_encoder") and getattr(self, "image_encoder", None) is None:
-                if image_encoder_folder is not None:
+                if image_encoder_folder is not None and (not is_face_adapter):
                     if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                         logger.info(f"loading image_encoder from {pretrained_model_name_or_path_or_dict}")
                         if image_encoder_folder.count("/") == 0:
@@ -696,14 +719,14 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         )
 
         image_proj_model.eval()
-        print("HELOOO 444444", self.device)
+
         self.image_proj_model = image_proj_model.to(self.device, dtype=self.dtype)
         #state_dict = torch.load(model_ckpt, map_location="cpu")
         state_dict = load_state_dict(model_ckpt)
         if "image_proj" in state_dict:
             state_dict = state_dict["image_proj"]
         self.image_proj_model.load_state_dict(state_dict)
-        print("HELOOO 55555555", self.image_proj_model.device)
+
         self.image_proj_model_in_features = image_emb_dim
 
     # def set_ip_adapter(self, model_ckpt, num_tokens, scale):
@@ -741,7 +764,61 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
     #     for attn_processor in unet.attn_processors.values():
     #         if isinstance(attn_processor, IPAttnProcessor):
     #             attn_processor.scale = scale
+    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_ip_adapter_image_embeds
+    def prepare_ip_adapter_image_embeds(
+            self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt, do_classifier_free_guidance
+    ):
+        if ip_adapter_image_embeds is None:
+            if not isinstance(ip_adapter_image, list):
+                ip_adapter_image = [ip_adapter_image]
 
+            if len(ip_adapter_image) != len(self.unet.encoder_hid_proj.image_projection_layers):
+                raise ValueError(
+                    f"`ip_adapter_image` must have same length as the number of IP Adapters. Got {len(ip_adapter_image)} images and {len(self.unet.encoder_hid_proj.image_projection_layers)} IP Adapters."
+                )
+
+            image_embeds = []
+            for single_ip_adapter_image, image_proj_layer in zip(
+                    ip_adapter_image, self.unet.encoder_hid_proj.image_projection_layers
+            ):
+                output_hidden_state = not isinstance(image_proj_layer, ImageProjection)
+                single_image_embeds, single_negative_image_embeds = self.encode_image(
+                    single_ip_adapter_image, device, 1, output_hidden_state
+                )
+                print("single_image_embeds0", single_image_embeds.shape)
+                single_image_embeds = torch.stack([single_image_embeds] * num_images_per_prompt, dim=0)
+                print("single_image_embeds1", single_image_embeds.shape)
+
+                single_negative_image_embeds = torch.stack(
+                    [single_negative_image_embeds] * num_images_per_prompt, dim=0
+                )
+
+                if do_classifier_free_guidance:
+                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                    single_image_embeds = single_image_embeds.to(device)
+                print("single_image_embeds2", single_image_embeds.shape)
+
+                image_embeds.append(single_image_embeds)
+        else:
+            repeat_dims = [1]
+            image_embeds = []
+            for single_image_embeds in ip_adapter_image_embeds:
+                if do_classifier_free_guidance:
+                    single_negative_image_embeds, single_image_embeds = single_image_embeds.chunk(2)
+                    single_image_embeds = single_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                    )
+                    single_negative_image_embeds = single_negative_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_negative_image_embeds.shape[1:]))
+                    )
+                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                else:
+                    single_image_embeds = single_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                    )
+                image_embeds.append(single_image_embeds)
+
+        return image_embeds
     def _encode_prompt_image_emb(self, prompt_image_emb, device, dtype, do_classifier_free_guidance):
         if isinstance(prompt_image_emb, torch.Tensor):
             prompt_image_emb = prompt_image_emb.clone().detach()
@@ -1042,14 +1119,17 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
         # 3.2 Encode ip_adapter_image
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-            image_embeds = self.prepare_ip_adapter_image_embeds(
+            style_image_embeds = self.prepare_ip_adapter_image_embeds(
                 ip_adapter_image,
                 ip_adapter_image_embeds,
                 device,
                 batch_size * num_images_per_prompt,
                 self.do_classifier_free_guidance,
             )
-
+        style_image_embeds[0] = style_image_embeds[0].to(self.dtype)
+        style_image_embeds[1] = style_image_embeds[1].to(self.dtype)
+        print("style_image_embeds[0].shape", style_image_embeds[0].shape)
+        print("style_image_embeds[1].shape", style_image_embeds[1].shape)
         # 3.2 Encode image prompt
         prompt_image_emb = self._encode_prompt_image_emb(
             image_embeds, device, self.unet.dtype, self.do_classifier_free_guidance
@@ -1239,7 +1319,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-                    added_cond_kwargs["image_embeds"] = image_embeds
+                    added_cond_kwargs["image_embeds"] = style_image_embeds
 
                 # predict the noise residual
                 noise_pred = self.unet(
