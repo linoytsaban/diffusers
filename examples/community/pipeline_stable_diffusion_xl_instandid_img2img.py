@@ -207,77 +207,77 @@ class Resampler(nn.Module):
         return self.norm_out(latents)
 
 
-class AttnProcessor(nn.Module):
-    r"""
-    Default processor for performing attention-related computations.
-    """
-
-    def __init__(
-            self,
-            hidden_size=None,
-            cross_attention_dim=None,
-    ):
-        super().__init__()
-
-    def __call__(
-            self,
-            attn,
-            hidden_states,
-            encoder_hidden_states=None,
-            attention_mask=None,
-            temb=None,
-    ):
-        residual = hidden_states
-
-        if attn.spatial_norm is not None:
-            hidden_states = attn.spatial_norm(hidden_states, temb)
-
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channel, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        )
-        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-
-        query = attn.to_q(hidden_states)
-
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
-        elif attn.norm_cross:
-            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
-
-        query = attn.head_to_batch_dim(query)
-        key = attn.head_to_batch_dim(key)
-        value = attn.head_to_batch_dim(value)
-
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        hidden_states = torch.bmm(attention_probs, value)
-        hidden_states = attn.batch_to_head_dim(hidden_states)
-
-        # linear proj
-        hidden_states = attn.to_out[0](hidden_states)
-        # dropout
-        hidden_states = attn.to_out[1](hidden_states)
-
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-
-        if attn.residual_connection:
-            hidden_states = hidden_states + residual
-
-        hidden_states = hidden_states / attn.rescale_output_factor
-
-        return hidden_states
+# class AttnProcessor(nn.Module):
+#     r"""
+#     Default processor for performing attention-related computations.
+#     """
+#
+#     def __init__(
+#             self,
+#             hidden_size=None,
+#             cross_attention_dim=None,
+#     ):
+#         super().__init__()
+#
+#     def __call__(
+#             self,
+#             attn,
+#             hidden_states,
+#             encoder_hidden_states=None,
+#             attention_mask=None,
+#             temb=None,
+#     ):
+#         residual = hidden_states
+#
+#         if attn.spatial_norm is not None:
+#             hidden_states = attn.spatial_norm(hidden_states, temb)
+#
+#         input_ndim = hidden_states.ndim
+#
+#         if input_ndim == 4:
+#             batch_size, channel, height, width = hidden_states.shape
+#             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+#
+#         batch_size, sequence_length, _ = (
+#             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+#         )
+#         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+#
+#         if attn.group_norm is not None:
+#             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+#
+#         query = attn.to_q(hidden_states)
+#
+#         if encoder_hidden_states is None:
+#             encoder_hidden_states = hidden_states
+#         elif attn.norm_cross:
+#             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+#
+#         key = attn.to_k(encoder_hidden_states)
+#         value = attn.to_v(encoder_hidden_states)
+#
+#         query = attn.head_to_batch_dim(query)
+#         key = attn.head_to_batch_dim(key)
+#         value = attn.head_to_batch_dim(value)
+#
+#         attention_probs = attn.get_attention_scores(query, key, attention_mask)
+#         hidden_states = torch.bmm(attention_probs, value)
+#         hidden_states = attn.batch_to_head_dim(hidden_states)
+#
+#         # linear proj
+#         hidden_states = attn.to_out[0](hidden_states)
+#         # dropout
+#         hidden_states = attn.to_out[1](hidden_states)
+#
+#         if input_ndim == 4:
+#             hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+#
+#         if attn.residual_connection:
+#             hidden_states = hidden_states + residual
+#
+#         hidden_states = hidden_states / attn.rescale_output_factor
+#
+#         return hidden_states
 
 
 # class IPAttnProcessor(nn.Module):
@@ -626,6 +626,10 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         for pretrained_model_name_or_path_or_dict, weight_name, subfolder, is_face_adapter in zip(
                 pretrained_model_name_or_path_or_dict, weight_name, subfolder, is_face_adapter
         ):
+            if is_face_adapter:
+                print("FACE ADAPTER")
+            else:
+                print("InstantStyle")
             if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                 model_file = _get_model_file(
                     pretrained_model_name_or_path_or_dict,
@@ -645,6 +649,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                     with safe_open(model_file, framework="pt", device="cpu") as f:
                         for key in f.keys():
                             if key.startswith("image_proj."):
+                                print("image proj", is_face_adapter)
                                 state_dict["image_proj"][key.replace("image_proj.", "")] = f.get_tensor(key)
                             elif key.startswith("ip_adapter."):
                                 state_dict["ip_adapter"][key.replace("ip_adapter.", "")] = f.get_tensor(key)
@@ -661,6 +666,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
             # load CLIP image encoder here if it has not been registered to the pipeline yet
             if hasattr(self, "image_encoder") and getattr(self, "image_encoder", None) is None:
+                print("HOLA 1", is_face_adapter)
                 if image_encoder_folder is not None and (not is_face_adapter):
                     if not isinstance(pretrained_model_name_or_path_or_dict, dict):
                         logger.info(f"loading image_encoder from {pretrained_model_name_or_path_or_dict}")
@@ -668,7 +674,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                             image_encoder_subfolder = Path(subfolder, image_encoder_folder).as_posix()
                         else:
                             image_encoder_subfolder = Path(image_encoder_folder).as_posix()
-
+                        print("HOLA 2", is_face_adapter)
                         image_encoder = CLIPVisionModelWithProjection.from_pretrained(
                             pretrained_model_name_or_path_or_dict,
                             subfolder=image_encoder_subfolder,
@@ -687,6 +693,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
             # create feature extractor if it has not been registered to the pipeline yet
             if hasattr(self, "feature_extractor") and getattr(self, "feature_extractor", None) is None:
+                print("HOLA 3", is_face_adapter)
                 feature_extractor = CLIPImageProcessor()
                 self.register_modules(feature_extractor=feature_extractor)
 
@@ -696,6 +703,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
 
         extra_loras = unet._load_ip_adapter_loras(state_dicts)
         if extra_loras != {}:
+            print("HOLA 4", is_face_adapter)
             if not USE_PEFT_BACKEND:
                 logger.warning("PEFT backend is required to load these weights.")
             else:
@@ -1319,7 +1327,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-                    added_cond_kwargs["image_embeds"] = style_image_embeds
+                    added_cond_kwargs["image_embeds"] = style_image_embeds[1]
 
                 # predict the noise residual
                 noise_pred = self.unet(
