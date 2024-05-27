@@ -834,6 +834,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             prompt_image_emb = prompt_image_emb.clone().detach()
         else:
             prompt_image_emb = torch.tensor(prompt_image_emb)
+        print("image_shape", prompt_image_emb.shape)
 
         prompt_image_emb = prompt_image_emb.to(device=device, dtype=dtype)
         prompt_image_emb = prompt_image_emb.reshape([1, -1, self.image_proj_model_in_features])
@@ -870,9 +871,9 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         pooled_prompt_embeds: Optional[torch.Tensor] = None,
         negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
-        ip_adapter_image: Optional[PipelineImageInput] = None,
-        ip_adapter_image_embeds: Optional[List[torch.FloatTensor]] = None,
-        image_embeds: Optional[torch.Tensor] = None,
+            ip_adapter_image: Optional[PipelineImageInput] = None,
+            ip_adapter_image_embeds: Optional[List[torch.FloatTensor]] = None,
+            image_embeds: Optional[torch.Tensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -1140,6 +1141,14 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         style_image_embeds[1] = style_image_embeds[1].to(self.dtype)
         print("style_image_embeds[0].shape", style_image_embeds[0].shape)
         print("style_image_embeds[1].shape", style_image_embeds[1].shape)
+
+        # style_image_embeds_0 = self._encode_prompt_image_emb(
+        #     ip_adapter_image[0], device, self.unet.dtype, self.do_classifier_free_guidance
+        # )
+        style_image_embeds_1 = self._encode_prompt_image_emb(
+            ip_adapter_image[1], device, self.unet.dtype, self.do_classifier_free_guidance
+        )
+        # print("test_prompt_image_emb.shape", test_prompt_image_emb.shape)
         # 3.2 Encode image prompt
         prompt_image_emb = self._encode_prompt_image_emb(
             image_embeds, device, self.unet.dtype, self.do_classifier_free_guidance
@@ -1328,7 +1337,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                     mid_block_res_sample = torch.cat([torch.zeros_like(mid_block_res_sample), mid_block_res_sample])
 
                 if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
-                    added_cond_kwargs["image_embeds"] = style_image_embeds[1]
+                    added_cond_kwargs["image_embeds"] = torch.cat([prompt_image_emb,style_image_embeds_1])
 
                 # predict the noise residual
                 noise_pred = self.unet(
