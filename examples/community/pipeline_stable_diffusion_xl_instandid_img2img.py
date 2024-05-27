@@ -207,194 +207,197 @@ class Resampler(nn.Module):
         return self.norm_out(latents)
 
 
-# class AttnProcessor(nn.Module):
-#     r"""
-#     Default processor for performing attention-related computations.
-#     """
-#
-#     def __init__(
-#             self,
-#             hidden_size=None,
-#             cross_attention_dim=None,
-#     ):
-#         super().__init__()
-#
-#     def __call__(
-#             self,
-#             attn,
-#             hidden_states,
-#             encoder_hidden_states=None,
-#             attention_mask=None,
-#             temb=None,
-#     ):
-#         residual = hidden_states
-#
-#         if attn.spatial_norm is not None:
-#             hidden_states = attn.spatial_norm(hidden_states, temb)
-#
-#         input_ndim = hidden_states.ndim
-#
-#         if input_ndim == 4:
-#             batch_size, channel, height, width = hidden_states.shape
-#             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-#
-#         batch_size, sequence_length, _ = (
-#             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-#         )
-#         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-#
-#         if attn.group_norm is not None:
-#             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-#
-#         query = attn.to_q(hidden_states)
-#
-#         if encoder_hidden_states is None:
-#             encoder_hidden_states = hidden_states
-#         elif attn.norm_cross:
-#             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-#
-#         key = attn.to_k(encoder_hidden_states)
-#         value = attn.to_v(encoder_hidden_states)
-#
-#         query = attn.head_to_batch_dim(query)
-#         key = attn.head_to_batch_dim(key)
-#         value = attn.head_to_batch_dim(value)
-#
-#         attention_probs = attn.get_attention_scores(query, key, attention_mask)
-#         hidden_states = torch.bmm(attention_probs, value)
-#         hidden_states = attn.batch_to_head_dim(hidden_states)
-#
-#         # linear proj
-#         hidden_states = attn.to_out[0](hidden_states)
-#         # dropout
-#         hidden_states = attn.to_out[1](hidden_states)
-#
-#         if input_ndim == 4:
-#             hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-#
-#         if attn.residual_connection:
-#             hidden_states = hidden_states + residual
-#
-#         hidden_states = hidden_states / attn.rescale_output_factor
-#
-#         return hidden_states
+class AttnProcessor(nn.Module):
+    r"""
+    Default processor for performing attention-related computations.
+    """
+
+    def __init__(
+        self,
+        hidden_size=None,
+        cross_attention_dim=None,
+    ):
+        super().__init__()
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        temb=None,
+    ):
+        residual = hidden_states
+
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+
+        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+
+        # linear proj
+        hidden_states = attn.to_out[0](hidden_states)
+        # dropout
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+
+        hidden_states = hidden_states / attn.rescale_output_factor
+
+        return hidden_states
 
 
-# class IPAttnProcessor(nn.Module):
-#     r"""
-#     Attention processor for IP-Adapater.
-#     Args:
-#         hidden_size (`int`):
-#             The hidden size of the attention layer.
-#         cross_attention_dim (`int`):
-#             The number of channels in the `encoder_hidden_states`.
-#         scale (`float`, defaults to 1.0):
-#             the weight scale of image prompt.
-#         num_tokens (`int`, defaults to 4 when do ip_adapter_plus it should be 16):
-#             The context length of the image features.
-#     """
-#
-#     def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4, skip=False):
-#         super().__init__()
-#
-#         self.hidden_size = hidden_size
-#         self.cross_attention_dim = cross_attention_dim
-#         self.scale = scale
-#         self.num_tokens = num_tokens
-#         self.skip = skip
-#
-#         self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-#         self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
-#
-#     def __call__(
-#         self,
-#         attn,
-#         hidden_states,
-#         encoder_hidden_states=None,
-#         attention_mask=None,
-#         temb=None,
-#     ):
-#         residual = hidden_states
-#
-#         if attn.spatial_norm is not None:
-#             hidden_states = attn.spatial_norm(hidden_states, temb)
-#
-#         input_ndim = hidden_states.ndim
-#
-#         if input_ndim == 4:
-#             batch_size, channel, height, width = hidden_states.shape
-#             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-#
-#         batch_size, sequence_length, _ = (
-#             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-#         )
-#         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-#
-#         if attn.group_norm is not None:
-#             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
-#
-#         query = attn.to_q(hidden_states)
-#
-#         if encoder_hidden_states is None:
-#             encoder_hidden_states = hidden_states
-#         else:
-#             # get encoder_hidden_states, ip_hidden_states
-#             end_pos = encoder_hidden_states.shape[1] - self.num_tokens
-#             encoder_hidden_states, ip_hidden_states = (
-#                 encoder_hidden_states[:, :end_pos, :],
-#                 encoder_hidden_states[:, end_pos:, :],
-#             )
-#             if attn.norm_cross:
-#                 encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
-#
-#         key = attn.to_k(encoder_hidden_states)
-#         value = attn.to_v(encoder_hidden_states)
-#
-#         query = attn.head_to_batch_dim(query)
-#         key = attn.head_to_batch_dim(key)
-#         value = attn.head_to_batch_dim(value)
-#
-#         attention_probs = attn.get_attention_scores(query, key, attention_mask)
-#         hidden_states = torch.bmm(attention_probs, value)
-#         hidden_states = attn.batch_to_head_dim(hidden_states)
-#
-#         if not self.skip:
-#             # for ip-adapter
-#             ip_key = self.to_k_ip(ip_hidden_states)
-#             ip_value = self.to_v_ip(ip_hidden_states)
-#
-#             ip_key = attn.head_to_batch_dim(ip_key)
-#             ip_value = attn.head_to_batch_dim(ip_value)
-#
-#             ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
-#             self.attn_map = ip_attention_probs
-#             ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
-#             ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
-#
-#             hidden_states = hidden_states + self.scale * ip_hidden_states
-#
-#         # linear proj
-#         hidden_states = attn.to_out[0](hidden_states)
-#         # dropout
-#         hidden_states = attn.to_out[1](hidden_states)
-#
-#         if input_ndim == 4:
-#             hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
-#
-#         if attn.residual_connection:
-#             hidden_states = hidden_states + residual
-#
-#         hidden_states = hidden_states / attn.rescale_output_factor
-#
-#         return hidden_states
-#
-#     def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
-#         # TODO attention_mask
-#         query = query.contiguous()
-#         key = key.contiguous()
-#         value = value.contiguous()
-#         hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
-#         return hidden_states
+class IPAttnProcessor(nn.Module):
+    r"""
+    Attention processor for IP-Adapater.
+    Args:
+        hidden_size (`int`):
+            The hidden size of the attention layer.
+        cross_attention_dim (`int`):
+            The number of channels in the `encoder_hidden_states`.
+        scale (`float`, defaults to 1.0):
+            the weight scale of image prompt.
+        num_tokens (`int`, defaults to 4 when do ip_adapter_plus it should be 16):
+            The context length of the image features.
+    """
+
+    def __init__(self, hidden_size, cross_attention_dim=None, scale=1.0, num_tokens=4):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.cross_attention_dim = cross_attention_dim
+        self.scale = scale
+        self.num_tokens = num_tokens
+
+        self.to_k_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
+        self.to_v_ip = nn.Linear(cross_attention_dim or hidden_size, hidden_size, bias=False)
+
+    def __call__(
+        self,
+        attn,
+        hidden_states,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        temb=None,
+    ):
+        residual = hidden_states
+
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        else:
+            # get encoder_hidden_states, ip_hidden_states
+            end_pos = encoder_hidden_states.shape[1] - self.num_tokens
+            encoder_hidden_states, ip_hidden_states = (
+                encoder_hidden_states[:, :end_pos, :],
+                encoder_hidden_states[:, end_pos:, :],
+            )
+            if attn.norm_cross:
+                encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+
+        if xformers_available:
+            hidden_states = self._memory_efficient_attention_xformers(query, key, value, attention_mask)
+        else:
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+
+        # for ip-adapter
+        ip_key = self.to_k_ip(ip_hidden_states)
+        ip_value = self.to_v_ip(ip_hidden_states)
+
+        ip_key = attn.head_to_batch_dim(ip_key)
+        ip_value = attn.head_to_batch_dim(ip_value)
+
+        if xformers_available:
+            ip_hidden_states = self._memory_efficient_attention_xformers(query, ip_key, ip_value, None)
+        else:
+            ip_attention_probs = attn.get_attention_scores(query, ip_key, None)
+            ip_hidden_states = torch.bmm(ip_attention_probs, ip_value)
+        ip_hidden_states = attn.batch_to_head_dim(ip_hidden_states)
+
+        hidden_states = hidden_states + self.scale * ip_hidden_states
+
+        # linear proj
+        hidden_states = attn.to_out[0](hidden_states)
+        # dropout
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+
+        hidden_states = hidden_states / attn.rescale_output_factor
+
+        return hidden_states
+
+    def _memory_efficient_attention_xformers(self, query, key, value, attention_mask):
+        # TODO attention_mask
+        query = query.contiguous()
+        key = key.contiguous()
+        value = value.contiguous()
+        hidden_states = xformers.ops.memory_efficient_attention(query, key, value, attn_bias=attention_mask)
+        return hidden_states
 
 
 EXAMPLE_DOC_STRING = """
@@ -729,8 +732,7 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
         image_proj_model.eval()
 
         self.image_proj_model = image_proj_model.to(self.device, dtype=self.dtype)
-        #state_dict = torch.load(model_ckpt, map_location="cpu")
-        state_dict = load_state_dict(model_ckpt)
+        state_dict = torch.load(model_ckpt, map_location="cpu")
         if "image_proj" in state_dict:
             state_dict = state_dict["image_proj"]
         self.image_proj_model.load_state_dict(state_dict)
@@ -848,48 +850,48 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-            self,
-            prompt: Union[str, List[str]] = None,
-            prompt_2: Optional[Union[str, List[str]]] = None,
-            image: PipelineImageInput = None,
-            control_image: PipelineImageInput = None,
-            strength: float = 0.8,
-            height: Optional[int] = None,
-            width: Optional[int] = None,
-            num_inference_steps: int = 50,
-            guidance_scale: float = 5.0,
-            negative_prompt: Optional[Union[str, List[str]]] = None,
-            negative_prompt_2: Optional[Union[str, List[str]]] = None,
-            num_images_per_prompt: Optional[int] = 1,
-            eta: float = 0.0,
-            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-            latents: Optional[torch.FloatTensor] = None,
-            prompt_embeds: Optional[torch.FloatTensor] = None,
-            negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-            pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-            negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-            ip_adapter_image: Optional[PipelineImageInput] = None,
-            ip_adapter_image_embeds: Optional[List[torch.FloatTensor]] = None,
-            image_embeds: Optional[torch.FloatTensor] = None,
-            output_type: Optional[str] = "pil",
-            return_dict: bool = True,
-            cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-            controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
-            guess_mode: bool = False,
-            control_guidance_start: Union[float, List[float]] = 0.0,
-            control_guidance_end: Union[float, List[float]] = 1.0,
-            original_size: Tuple[int, int] = None,
-            crops_coords_top_left: Tuple[int, int] = (0, 0),
-            target_size: Tuple[int, int] = None,
-            negative_original_size: Optional[Tuple[int, int]] = None,
-            negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
-            negative_target_size: Optional[Tuple[int, int]] = None,
-            aesthetic_score: float = 6.0,
-            negative_aesthetic_score: float = 2.5,
-            clip_skip: Optional[int] = None,
-            callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-            callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-            **kwargs,
+        self,
+        prompt: Union[str, List[str]] = None,
+        prompt_2: Optional[Union[str, List[str]]] = None,
+        image: PipelineImageInput = None,
+        control_image: PipelineImageInput = None,
+        strength: float = 0.8,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 5.0,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        negative_prompt_2: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: Optional[int] = 1,
+        eta: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.Tensor] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        pooled_prompt_embeds: Optional[torch.Tensor] = None,
+        negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
+        ip_adapter_image: Optional[PipelineImageInput] = None,
+        ip_adapter_image_embeds: Optional[List[torch.FloatTensor]] = None,
+        image_embeds: Optional[torch.Tensor] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
+        guess_mode: bool = False,
+        control_guidance_start: Union[float, List[float]] = 0.0,
+        control_guidance_end: Union[float, List[float]] = 1.0,
+        original_size: Tuple[int, int] = None,
+        crops_coords_top_left: Tuple[int, int] = (0, 0),
+        target_size: Tuple[int, int] = None,
+        negative_original_size: Optional[Tuple[int, int]] = None,
+        negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
+        negative_target_size: Optional[Tuple[int, int]] = None,
+        aesthetic_score: float = 6.0,
+        negative_aesthetic_score: float = 2.5,
+        clip_skip: Optional[int] = None,
+        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        **kwargs,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -900,10 +902,10 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             prompt_2 (`str` or `List[str]`, *optional*):
                 The prompt or prompts to be sent to `tokenizer_2` and `text_encoder_2`. If not defined, `prompt` is
                 used in both text-encoders.
-            image (`torch.FloatTensor`, `PIL.Image.Image`, `np.ndarray`, `List[torch.FloatTensor]`, `List[PIL.Image.Image]`, `List[np.ndarray]`,:
-                    `List[List[torch.FloatTensor]]`, `List[List[np.ndarray]]` or `List[List[PIL.Image.Image]]`):
+            image (`torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, `List[torch.Tensor]`, `List[PIL.Image.Image]`, `List[np.ndarray]`,:
+                    `List[List[torch.Tensor]]`, `List[List[np.ndarray]]` or `List[List[PIL.Image.Image]]`):
                 The ControlNet input condition to provide guidance to the `unet` for generation. If the type is
-                specified as `torch.FloatTensor`, it is passed to ControlNet as is. `PIL.Image.Image` can also be
+                specified as `torch.Tensor`, it is passed to ControlNet as is. `PIL.Image.Image` can also be
                 accepted as an image. The dimensions of the output image defaults to `image`'s dimensions. If height
                 and/or width are passed, `image` is resized accordingly. If multiple ControlNets are specified in
                 `init`, images must be passed as a list such that each element of the list can be correctly batched for
@@ -936,24 +938,24 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
                 A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
                 generation deterministic.
-            latents (`torch.FloatTensor`, *optional*):
+            latents (`torch.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
                 tensor is generated by sampling using the supplied random `generator`.
-            prompt_embeds (`torch.FloatTensor`, *optional*):
+            prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs (prompt weighting). If not
                 provided, text embeddings are generated from the `prompt` input argument.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
+            negative_prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs (prompt weighting). If
                 not provided, `negative_prompt_embeds` are generated from the `negative_prompt` input argument.
-            pooled_prompt_embeds (`torch.FloatTensor`, *optional*):
+            pooled_prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated pooled text embeddings. Can be used to easily tweak text inputs (prompt weighting). If
                 not provided, pooled text embeddings are generated from `prompt` input argument.
-            negative_pooled_prompt_embeds (`torch.FloatTensor`, *optional*):
+            negative_pooled_prompt_embeds (`torch.Tensor`, *optional*):
                 Pre-generated negative pooled text embeddings. Can be used to easily tweak text inputs (prompt
                 weighting). If not provided, pooled `negative_prompt_embeds` are generated from `negative_prompt` input
                 argument.
-            image_embeds (`torch.FloatTensor`, *optional*):
+            image_embeds (`torch.Tensor`, *optional*):
                 Pre-generated image embeddings.
             output_type (`str`, *optional*, defaults to `"pil"`):
                 The output format of the generated image. Choose between `PIL.Image` or `np.array`.
@@ -1283,7 +1285,6 @@ class StableDiffusionXLInstantIDImg2ImgPipeline(StableDiffusionXLControlNetImg2I
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
-
 
                 # controlnet(s) inference
                 if guess_mode and self.do_classifier_free_guidance:
