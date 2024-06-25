@@ -79,6 +79,7 @@ logger = get_logger(__name__)
 
 def save_model_card(
     repo_id: str,
+    use_dora: bool,
     images=None,
     base_model: str = None,
     train_text_encoder=False,
@@ -132,7 +133,7 @@ Please adhere to the licensing terms as described [here](https://huggingface.co/
         "text-to-image",
         "diffusers-training",
         "diffusers",
-        "lora",
+        "lora" if not use_dora else "dora",
         "sd3",
         "sd3-diffusers",
         "template:sd-lora",
@@ -339,6 +340,15 @@ def parse_args(input_args=None):
         type=int,
         default=4,
         help=("The dimension of the LoRA update matrices."),
+    )
+    parser.add_argument(
+        "--use_dora",
+        action="store_true",
+        default=False,
+        help=(
+            "Wether to train a DoRA as proposed in- DoRA: Weight-Decomposed Low-Rank Adaptation https://arxiv.org/abs/2402.09353. "
+            "Note: to use DoRA you need to install peft from main, `pip install git+https://github.com/huggingface/peft.git`"
+        ),
     )
     parser.add_argument(
         "--with_prior_preservation",
@@ -1178,6 +1188,7 @@ def main(args):
     # now we will add new LoRA weights to the attention layers
     transformer_lora_config = LoraConfig(
         r=args.rank,
+        use_dora=args.use_dora,
         lora_alpha=args.rank,
         init_lora_weights="gaussian",
         target_modules=["to_k", "to_q", "to_v", "to_out.0"],
@@ -1187,6 +1198,7 @@ def main(args):
     if args.train_text_encoder:
         text_lora_config = LoraConfig(
             r=args.rank,
+            use_dora=args.use_dora,
             lora_alpha=args.rank,
             init_lora_weights="gaussian",
             target_modules=["q_proj", "k_proj", "v_proj", "out_proj"],
@@ -1821,6 +1833,7 @@ def main(args):
         if args.push_to_hub:
             save_model_card(
                 repo_id,
+                use_dora=args.use_dora,
                 images=images,
                 base_model=args.pretrained_model_name_or_path,
                 instance_prompt=args.instance_prompt,
