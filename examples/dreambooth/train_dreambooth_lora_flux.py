@@ -1355,15 +1355,15 @@ def main(args):
                 text_lora_parameters_one.append(param)
             else:
                 param.requires_grad = False
-        text_lora_parameters_two = []
-        for name, param in text_encoder_two.named_parameters():
-            if "token_embedding" in name:
-                # ensure that dtype is float32, even if rest of the model that isn't trained is loaded in fp16
-                param.data = param.to(dtype=torch.float32)
-                param.requires_grad = True
-                text_lora_parameters_two.append(param)
-            else:
-                param.requires_grad = False
+        # text_lora_parameters_two = []
+        # for name, param in text_encoder_two.named_parameters():
+        #     if "token_embedding" in name:
+        #         # ensure that dtype is float32, even if rest of the model that isn't trained is loaded in fp16
+        #         param.data = param.to(dtype=torch.float32)
+        #         param.requires_grad = True
+        #         text_lora_parameters_two.append(param)
+        #     else:
+        #         param.requires_grad = False
 
     # Optimization parameters
     transformer_parameters_with_lr = {"params": transformer_lora_parameters, "lr": args.learning_rate}
@@ -1562,7 +1562,7 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    if args.train_text_encoder:
+    if not freeze_text_encoder:
         (
             transformer,
             text_encoder_one,
@@ -1657,22 +1657,13 @@ def main(args):
 
     for epoch in range(first_epoch, args.num_train_epochs):
         transformer.train()
-        if args.train_text_encoder:
+        if not freeze_text_encoder:
             text_encoder_one.train()
             # set top parameter requires_grad = True for gradient checkpointing works
             accelerator.unwrap_model(text_encoder_one).text_model.embeddings.requires_grad_(True)
-        if args.train_text_encoder_ti:
-            text_encoder_one.train()
-            text_encoder_two.train()
-            # set top parameter requires_grad = True for gradient checkpointing works
-            accelerator.unwrap_model(text_encoder_one).text_model.embeddings.requires_grad_(True)
-            accelerator.unwrap_model(text_encoder_two).text_model.embeddings.requires_grad_(True)
 
         for step, batch in enumerate(train_dataloader):
-            models_to_accumulate = [transformer]
-            if args.train_text_encoder:
-                models_to_accumulate.extend([text_encoder_one])
-            with accelerator.accumulate(models_to_accumulate):
+            with accelerator.accumulate(transformer):
                 pixel_values = batch["pixel_values"].to(dtype=vae.dtype)
                 prompts = batch["prompts"]
 
@@ -1695,7 +1686,7 @@ def main(args):
                             prompt=prompts,
                         )
                 else:
-                    if args.train_text_encoder:
+                    if not freeze_text_encoder:
                         prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
                             text_encoders=[text_encoder_one, text_encoder_two],
                             tokenizers=[None, None],
@@ -1809,7 +1800,7 @@ def main(args):
                 if accelerator.sync_gradients:
                     params_to_clip = (
                         itertools.chain(transformer.parameters(), text_encoder_one.parameters())
-                        if args.train_text_encoder
+                        if not freeze_text_encoder
                         else transformer.parameters()
                     )
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
@@ -1859,7 +1850,7 @@ def main(args):
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
                 # create pipeline
-                if not args.train_text_encoder:
+                if not freeze_text_encoder:
                     text_encoder_one, text_encoder_two = load_text_encoders(text_encoder_cls_one, text_encoder_cls_two)
                 pipeline = FluxPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
@@ -1879,7 +1870,7 @@ def main(args):
                     pipeline_args=pipeline_args,
                     epoch=epoch,
                 )
-                if not args.train_text_encoder:
+                if freeze_text_encoder:
                     del text_encoder_one, text_encoder_two
                     torch.cuda.empty_cache()
                     gc.collect()
@@ -1891,7 +1882,7 @@ def main(args):
         transformer = transformer.to(torch.float32)
         transformer_lora_layers = get_peft_model_state_dict(transformer)
 
-        if args.train_text_encoder:
+        if not freeze_text_encoder:
             text_encoder_one = unwrap_model(text_encoder_one)
             text_encoder_lora_layers = get_peft_model_state_dict(text_encoder_one.to(torch.float32))
         else:
@@ -1933,6 +1924,7 @@ def main(args):
                 images=images,
                 base_model=args.pretrained_model_name_or_path,
                 train_text_encoder=args.train_text_encoder,
+                train_text_encoder_ti=args.train_text_encoder_ti,
                 instance_prompt=args.instance_prompt,
                 validation_prompt=args.validation_prompt,
                 repo_folder=args.output_dir,
