@@ -510,7 +510,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
             else:
                 if index_block == prompt_block_index:
-                    encoder_hidden_states, hidden_states = block(
+                    encoder_hidden_states_index, hidden_states = block(
                         hidden_states=hidden_states,
                         encoder_hidden_states=encoder_hidden_states_index,
                         temb=temb_index,
