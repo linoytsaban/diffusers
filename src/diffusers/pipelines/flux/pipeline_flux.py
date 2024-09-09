@@ -537,6 +537,10 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
         num_inference_steps: int = 28,
         timesteps: List[int] = None,
         guidance_scale: float = 3.5,
+        prompt_block_index: int = None,  # added for block prompting
+        block_specific_prompt: Union[str, List[str]] = None, # added for block prompting
+        block_specific_prompt_2: Union[str, List[str]] = None, # added for block prompting
+        prompt_block_index_single: int = None,  # added for block prompting
         num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.FloatTensor] = None,
@@ -666,6 +670,21 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
             lora_scale=lora_scale,
         )
 
+        (
+            prompt_embeds_block_specific,
+            pooled_prompt_embeds_block_specific,
+            text_ids,
+        ) = self.encode_prompt(
+            prompt=block_specific_prompt,
+            prompt_2=block_specific_prompt_2,
+            prompt_embeds=None,
+            pooled_prompt_embeds=None,
+            device=device,
+            num_images_per_prompt=num_images_per_prompt,
+            max_sequence_length=max_sequence_length,
+            lora_scale=lora_scale,
+        )
+
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels // 4
         latents, latent_image_ids = self.prepare_latents(
@@ -722,6 +741,11 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,
+                    prompt_block_index=prompt_block_index,  # added for block prompting
+                    encoder_hidden_states_index=prompt_embeds_block_specific,  # added for block prompting
+                    pooled_projections_index=pooled_prompt_embeds_block_specific,  # added for block prompting
+                    prompt_block_index_single=prompt_block_index_single,  # added for block prompting
+                    pooled_projections_index_single=pooled_prompt_embeds_block_specific,  # added for block prompting
                     txt_ids=text_ids,
                     img_ids=latent_image_ids,
                     joint_attention_kwargs=self.joint_attention_kwargs,

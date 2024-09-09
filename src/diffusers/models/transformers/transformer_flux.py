@@ -390,6 +390,11 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor = None,
         pooled_projections: torch.Tensor = None,
+        prompt_block_index: int = None, # added for block prompting
+        encoder_hidden_states_index: torch.Tensor = None,  # added for block prompting
+        pooled_projections_index: torch.Tensor = None,  # added for block prompting
+        prompt_block_index_single: int = None,  # added for block prompting
+        pooled_projections_index_single: torch.Tensor = None,  # added for block prompting
         timestep: torch.LongTensor = None,
         img_ids: torch.Tensor = None,
         txt_ids: torch.Tensor = None,
@@ -453,6 +458,19 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         )
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
+        temb_index = (
+            self.time_text_embed(timestep, pooled_projections_index)
+            if guidance is None
+            else self.time_text_embed(timestep, guidance, pooled_projections_index)
+        )
+        encoder_hidden_states_index = self.context_embedder(encoder_hidden_states_index)
+
+        temb_index_single = (
+            self.time_text_embed(timestep, pooled_projections_index_single)
+            if guidance is None
+            else self.time_text_embed(timestep, guidance, pooled_projections_index_single)
+        )
+
         if txt_ids.ndim == 3:
             logger.warning(
                 "Passing `txt_ids` 3d torch.Tensor is deprecated."
@@ -491,12 +509,20 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                 )
 
             else:
-                encoder_hidden_states, hidden_states = block(
-                    hidden_states=hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    temb=temb,
-                    image_rotary_emb=image_rotary_emb,
-                )
+                if index_block == prompt_block_index:
+                    encoder_hidden_states_index, hidden_states = block(
+                        hidden_states=hidden_states,
+                        encoder_hidden_states=encoder_hidden_states_index,
+                        temb=temb_index,
+                        image_rotary_emb=image_rotary_emb,
+                    )
+                else:
+                    encoder_hidden_states, hidden_states = block(
+                        hidden_states=hidden_states,
+                        encoder_hidden_states=encoder_hidden_states,
+                        temb=temb,
+                        image_rotary_emb=image_rotary_emb,
+                    )
 
             # controlnet residual
             if controlnet_block_samples is not None:
@@ -528,11 +554,18 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                 )
 
             else:
-                hidden_states = block(
-                    hidden_states=hidden_states,
-                    temb=temb,
-                    image_rotary_emb=image_rotary_emb,
-                )
+                if index_block == prompt_block_index_single:
+                    hidden_states = block(
+                        hidden_states=hidden_states,
+                        temb=temb_index_single,
+                        image_rotary_emb=image_rotary_emb,
+                    )
+                else:
+                    hidden_states = block(
+                        hidden_states=hidden_states,
+                        temb=temb,
+                        image_rotary_emb=image_rotary_emb,
+                    )
 
             # controlnet residual
             if controlnet_single_block_samples is not None:
