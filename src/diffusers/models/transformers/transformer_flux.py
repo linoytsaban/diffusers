@@ -563,7 +563,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                 else:
                     hidden_states = block(
                         hidden_states=hidden_states,
-                        temb=temb,
+                        temb=temb_index_single,
                         image_rotary_emb=image_rotary_emb,
                     )
 
