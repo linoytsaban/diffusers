@@ -908,7 +908,7 @@ class RFInversionFluxPipeline(
 
         # 5. Prepare timesteps
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps) if sigmas is None else sigmas
-        image_seq_len = (int(height) // self.vae_scale_factor // 2) * (int(width) // self.vae_scale_factor // 2)
+        image_seq_len = latents.shape[1]
         mu = calculate_shift(
             image_seq_len,
             self.scheduler.config.get("base_image_seq_len", 256),
@@ -958,11 +958,8 @@ class RFInversionFluxPipeline(
                     [latents] * (1 + enabled_editing_prompts)) if self.do_classifier_free_guidance else latents
                 timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
 
-                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latents.shape[0]).to(latents.dtype)
-
                 noise_pred = self.transformer(
-                    hidden_states=latents,
+                    hidden_states=latent_model_input,
                     timestep=timestep / 1000,
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
@@ -1260,6 +1257,7 @@ class RFInversionFluxPipeline(
             prompt_embeds,
             pooled_prompt_embeds,
             text_ids,
+            _, __
         ) = self.encode_prompt(
             prompt=source_prompt,
             prompt_2=source_prompt,
