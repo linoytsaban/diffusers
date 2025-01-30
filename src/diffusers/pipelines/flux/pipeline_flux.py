@@ -630,34 +630,42 @@ class FluxPipeline(
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
-        self,
-        prompt: Union[str, List[str]] = None,
-        prompt_2: Optional[Union[str, List[str]]] = None,
-        negative_prompt: Union[str, List[str]] = None,
-        negative_prompt_2: Optional[Union[str, List[str]]] = None,
-        true_cfg_scale: float = 1.0,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 28,
-        sigmas: Optional[List[float]] = None,
-        guidance_scale: float = 3.5,
-        num_images_per_prompt: Optional[int] = 1,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-        ip_adapter_image: Optional[PipelineImageInput] = None,
-        ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
-        negative_ip_adapter_image: Optional[PipelineImageInput] = None,
-        negative_ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
-        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        max_sequence_length: int = 512,
+            self,
+            prompt: Union[str, List[str]] = None,
+            prompt_2: Optional[Union[str, List[str]]] = None,
+            negative_prompt: Union[str, List[str]] = None,
+            negative_prompt_2: Optional[Union[str, List[str]]] = None,
+            true_cfg_scale: float = 1.0,
+            height: Optional[int] = None,
+            width: Optional[int] = None,
+            num_inference_steps: int = 28,
+            timesteps: List[int] = None,
+            sigmas: Optional[List[float]] = None,
+            guidance_scale: float = 3.5,
+            num_images_per_prompt: Optional[int] = 1,
+            generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+            latents: Optional[torch.FloatTensor] = None,
+            prompt_embeds: Optional[torch.FloatTensor] = None,
+            pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+            ip_adapter_image: Optional[PipelineImageInput] = None,
+            ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+            negative_ip_adapter_image: Optional[PipelineImageInput] = None,
+            negative_ip_adapter_image_embeds: Optional[List[torch.Tensor]] = None,
+            negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+            negative_pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
+            output_type: Optional[str] = "pil",
+            return_dict: bool = True,
+            joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+            callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+            callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+            max_sequence_length: int = 512,
+            invert_image: bool = False,
+            mm_copy_blocks=None,
+            single_copy_blocks=None,
+            mm_skip_blocks=None,
+            single_skip_blocks=None,
+            percentage_of_steps=1.0,
+            inverted_latent_list=None,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -869,11 +877,11 @@ class FluxPipeline(
             guidance = None
 
         if (ip_adapter_image is not None or ip_adapter_image_embeds is not None) and (
-            negative_ip_adapter_image is None and negative_ip_adapter_image_embeds is None
+                negative_ip_adapter_image is None and negative_ip_adapter_image_embeds is None
         ):
             negative_ip_adapter_image = np.zeros((width, height, 3), dtype=np.uint8)
         elif (ip_adapter_image is None and ip_adapter_image_embeds is None) and (
-            negative_ip_adapter_image is not None or negative_ip_adapter_image_embeds is not None
+                negative_ip_adapter_image is not None or negative_ip_adapter_image_embeds is not None
         ):
             ip_adapter_image = np.zeros((width, height, 3), dtype=np.uint8)
 
@@ -896,6 +904,17 @@ class FluxPipeline(
                 device,
                 batch_size * num_images_per_prompt,
             )
+        if invert_image:
+            timesteps = reversed(timesteps)
+            result_latent_list = []
+
+        if percentage_of_steps != 1:
+            end_timestep_idx = int(len(timesteps) * percentage_of_steps)
+            if invert_image:
+                timesteps = timesteps[:end_timestep_idx]
+            else:
+                timesteps = timesteps[len(timesteps) - end_timestep_idx:]
+
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -909,6 +928,16 @@ class FluxPipeline(
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
+                # handle guidance
+                if self.transformer.config.guidance_embeds:
+                    if isinstance(guidance_scale, list):
+                        guidance = torch.tensor(guidance_scale, device=device)
+                    else:
+                        guidance = torch.tensor([guidance_scale], device=device)
+                        guidance = guidance.expand(latents.shape[0])
+                else:
+                    guidance = None
+
                 noise_pred = self.transformer(
                     hidden_states=latents,
                     timestep=timestep / 1000,
@@ -919,6 +948,11 @@ class FluxPipeline(
                     img_ids=latent_image_ids,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
+                    step_index=i,
+                    mm_copy_blocks=mm_copy_blocks,
+                    single_copy_blocks=single_copy_blocks,
+                    mm_skip_blocks=mm_skip_blocks,
+                    single_skip_blocks=single_skip_blocks,
                 )[0]
 
                 if do_true_cfg:
@@ -939,7 +973,15 @@ class FluxPipeline(
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                if invert_image:
+                    # compute the next noisy sample x_t-1 -> x_t
+                    latents = self.scheduler.step_forward(noise_pred, t, latents, return_dict=False)[0]
+                    result_latent_list.append(latents)
+                else:
+                    # compute the previous noisy sample x_t -> x_t-1
+                    latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                    if inverted_latent_list is not None:
+                        latents[0] = inverted_latent_list[-i][0]
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
@@ -964,7 +1006,7 @@ class FluxPipeline(
 
         self._current_timestep = None
 
-        if output_type == "latent":
+        if output_type == "latent" or invert_image:
             image = latents
         else:
             latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
@@ -974,6 +1016,9 @@ class FluxPipeline(
 
         # Offload all models
         self.maybe_free_model_hooks()
+
+        if invert_image:
+            return result_latent_list
 
         if not return_dict:
             return (image,)
