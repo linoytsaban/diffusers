@@ -1415,6 +1415,8 @@ class JointAttnProcessor2_0:
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
+        index_block=None,
+        copy_layers=None,
         *args,
         **kwargs,
     ) -> torch.FloatTensor:
@@ -1426,6 +1428,22 @@ class JointAttnProcessor2_0:
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
+
+        # K,V replcaement
+        B, N, D = key.shape
+        if copy_layers is not None and index_block in copy_layers:
+            key[B // 2:][1:] = key[B // 2:][0:1]
+            value[B // 2:][1:] = value[B // 2:][0:1]
+
+        # `context` projections.
+        encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
+        encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
+        encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
+
+        # attention
+        query = torch.cat([query, encoder_hidden_states_query_proj], dim=1)
+        key = torch.cat([key, encoder_hidden_states_key_proj], dim=1)
+        value = torch.cat([value, encoder_hidden_states_value_proj], dim=1)
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -2271,13 +2289,27 @@ class FluxAttnProcessor2_0:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
+        attention_store = None,
+        step_index=None,
+        index_block=None,
+        single_copy_blocks=None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
         # `sample` projections.
         query = attn.to_q(hidden_states)
-        key = attn.to_k(hidden_states)
-        value = attn.to_v(hidden_states)
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        # K,V replcaement
+        B, N, D = key.shape
+        inject_k_v = single_copy_blocks is not None and index_block in single_copy_blocks
+        if inject_k_v:
+            key[1:, 512:] = key[:1, 512:]
+            value[1:, 512:] = value[:1, 512:]
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -2363,6 +2395,10 @@ class FluxAttnProcessor2_0_NPU:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
+        attention_store=None,
+        step_index=None,
+        index_block=None,
+        mm_copy_blocks=None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
@@ -2370,6 +2406,13 @@ class FluxAttnProcessor2_0_NPU:
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
+
+        # K,V replcaement
+        B, N, D = key.shape
+        inject_k_v = mm_copy_blocks is not None and index_block in mm_copy_blocks
+        if inject_k_v:
+            key[1:] = key[:1]
+            value[1:] = value[:1]
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -5169,8 +5212,6 @@ class IPAdapterAttnProcessor2_0(torch.nn.Module):
                 )
             else:
                 for index, (mask, scale, ip_state) in enumerate(zip(ip_adapter_masks, self.scale, ip_hidden_states)):
-                    if mask is None:
-                        continue
                     if not isinstance(mask, torch.Tensor) or mask.ndim != 4:
                         raise ValueError(
                             "Each element of the ip_adapter_masks array should be a tensor with shape "
