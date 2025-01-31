@@ -2292,7 +2292,7 @@ class FluxAttnProcessor2_0:
         attention_store = None,
         step_index=None,
         index_block=None,
-        single_copy_blocks=None,
+        mm_copy_blocks=None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
@@ -2306,10 +2306,10 @@ class FluxAttnProcessor2_0:
 
         # K,V replcaement
         B, N, D = key.shape
-        inject_k_v = single_copy_blocks is not None and index_block in single_copy_blocks
+        inject_k_v = mm_copy_blocks is not None and index_block in mm_copy_blocks
         if inject_k_v:
-            key[1:, 512:] = key[:1, 512:]
-            value[1:, 512:] = value[:1, 512:]
+            key[1:] = key[:1]
+            value[1:] = value[:1]
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
