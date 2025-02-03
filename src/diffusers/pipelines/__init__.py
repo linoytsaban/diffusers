@@ -398,6 +398,7 @@ else:
     _import_structure["kolors"] = [
         "KolorsPipeline",
         "KolorsImg2ImgPipeline",
+        "KolorsLEditsPPPipeline"
     ]
 
 try:
@@ -731,6 +732,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             from .kolors import (
                 KolorsImg2ImgPipeline,
                 KolorsPipeline,
+                KolorsLEditsPPPipeline
             )
 
         try:
