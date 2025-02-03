@@ -259,7 +259,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         # from IPython import embed; embed(); exit()
         device = device or self._execution_device
 
-       batch_size = 1 # todo change
+        batch_size = 1 # todo change
 
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer]
