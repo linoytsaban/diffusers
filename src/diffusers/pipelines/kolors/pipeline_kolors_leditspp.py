@@ -340,7 +340,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     output_hidden_states=True,
                 )
                 # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
-                pooled_prompt_embeds = edit_concepts_embeds.hidden_states[-1][-1, :, :].clone()
+                editing_pooled_prompt_embeds = edit_concepts_embeds.hidden_states[-1][-1, :, :].clone()
                 # [max_sequence_length, batch, hidden_size] -> [batch, max_sequence_length, hidden_size]
                 # clone to have a contiguous tensor
                 edit_concepts_embeds = edit_concepts_embeds.hidden_states[-2].permute(1, 0, 2).clone()
@@ -368,10 +368,10 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 bs_embed_edit * num_images_per_prompt, -1
             )
 
-        return (edit_concepts_embeds,
-                negative_prompt_embeds,
-                editing_pooled_prompt_embeds,
+        return (negative_prompt_embeds,
+                edit_concepts_embeds,
                 negative_pooled_prompt_embeds,
+                editing_pooled_prompt_embeds,
                 num_edit_tokens)
 
     # # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_image
