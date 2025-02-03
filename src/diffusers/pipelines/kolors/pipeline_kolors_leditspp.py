@@ -26,7 +26,7 @@ from ...schedulers import KarrasDiffusionSchedulers, DPMSolverMultistepScheduler
 from ...utils import is_torch_xla_available, logging, replace_example_docstring
 from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, StableDiffusionMixin
-from .pipeline_output import KolorsPipelineOutput
+from .pipeline_output import KolorsPipelineOutput, KolorsLEditsPPInversionPipelineOutput
 from .text_encoder import ChatGLMModel
 from .tokenizer import ChatGLMTokenizer
 
@@ -1338,7 +1338,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         if num_zero_noise_steps > 0:
             zs[-num_zero_noise_steps:] = torch.zeros_like(zs[-num_zero_noise_steps:])
         self.zs = zs
-        return LEditsPPInversionPipelineOutput(images=resized, vae_reconstruction_images=image_rec)
+        return KolorsLEditsPPInversionPipelineOutput(images=resized, vae_reconstruction_images=image_rec)
 
 
 # Copied from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.rescale_noise_cfg
