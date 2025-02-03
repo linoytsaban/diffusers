@@ -1096,7 +1096,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
 
         return KolorsPipelineOutput(images=image)
 
- @torch.no_grad()
+    @torch.no_grad()
     def invert(
         self,
         image: PipelineImageInput,
