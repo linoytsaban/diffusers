@@ -272,6 +272,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         if enable_edit_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
             negative_prompt_embeds = torch.zeros_like(prompt_embeds)
         elif enable_edit_guidance and negative_prompt_embeds is None:
+            print("hola")
             uncond_tokens: List[str]
             if negative_prompt is None:
                 uncond_tokens = [""] * batch_size
@@ -314,7 +315,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
                 negative_pooled_prompt_embeds = output.hidden_states[-1][-1, :, :].clone()
 
-                if do_classifier_free_guidance:
+                if enable_edit_guidance:
                     # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
                     seq_len = negative_prompt_embeds.shape[1]
 
