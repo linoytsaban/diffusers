@@ -22,7 +22,7 @@ from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import IPAdapterMixin, StableDiffusionXLLoraLoaderMixin
 from ...models import AutoencoderKL, ImageProjection, UNet2DConditionModel
 from ...models.attention_processor import AttnProcessor, AttnProcessor2_0, FusedAttnProcessor2_0, XFormersAttnProcessor
-from ...schedulers import KarrasDiffusionSchedulers, DPMSolverMultistepScheduler
+from ...schedulers import KarrasDiffusionSchedulers, DPMSolverMultistepScheduler, DDIMScheduler
 from ...utils import is_torch_xla_available, logging, replace_example_docstring
 from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, StableDiffusionMixin
