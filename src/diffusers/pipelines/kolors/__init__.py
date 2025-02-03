@@ -24,6 +24,7 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["pipeline_kolors"] = ["KolorsPipeline"]
     _import_structure["pipeline_kolors_img2img"] = ["KolorsImg2ImgPipeline"]
+    _import_structure["pipeline_kolors_leditspp"] = ["KolorsLEditsPPPipeline"]
     _import_structure["text_encoder"] = ["ChatGLMModel"]
     _import_structure["tokenizer"] = ["ChatGLMTokenizer"]
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     else:
         from .pipeline_kolors import KolorsPipeline
         from .pipeline_kolors_img2img import KolorsImg2ImgPipeline
+        from .pipeline_kolors_leditspp import KolorsLEditsPPPipeline
         from .text_encoder import ChatGLMModel
         from .tokenizer import ChatGLMTokenizer
 
