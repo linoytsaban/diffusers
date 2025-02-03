@@ -386,30 +386,66 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 negative_pooled_prompt_embeds,
                 num_edit_tokens)
 
-    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_image
-    def encode_image(self, image, device, num_images_per_prompt, output_hidden_states=None):
-        dtype = next(self.image_encoder.parameters()).dtype
+    # # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_image
+    # def encode_image(self, image, device, num_images_per_prompt, output_hidden_states=None):
+    #     dtype = next(self.image_encoder.parameters()).dtype
+    #
+    #     if not isinstance(image, torch.Tensor):
+    #         image = self.feature_extractor(image, return_tensors="pt").pixel_values
+    #
+    #     image = image.to(device=device, dtype=dtype)
+    #     if output_hidden_states:
+    #         image_enc_hidden_states = self.image_encoder(image, output_hidden_states=True).hidden_states[-2]
+    #         image_enc_hidden_states = image_enc_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
+    #         uncond_image_enc_hidden_states = self.image_encoder(
+    #             torch.zeros_like(image), output_hidden_states=True
+    #         ).hidden_states[-2]
+    #         uncond_image_enc_hidden_states = uncond_image_enc_hidden_states.repeat_interleave(
+    #             num_images_per_prompt, dim=0
+    #         )
+    #         return image_enc_hidden_states, uncond_image_enc_hidden_states
+    #     else:
+    #         image_embeds = self.image_encoder(image).image_embeds
+    #         image_embeds = image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
+    #         uncond_image_embeds = torch.zeros_like(image_embeds)
+    #
+    #         return image_embeds, uncond_image_embeds
 
-        if not isinstance(image, torch.Tensor):
-            image = self.feature_extractor(image, return_tensors="pt").pixel_values
-
-        image = image.to(device=device, dtype=dtype)
-        if output_hidden_states:
-            image_enc_hidden_states = self.image_encoder(image, output_hidden_states=True).hidden_states[-2]
-            image_enc_hidden_states = image_enc_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
-            uncond_image_enc_hidden_states = self.image_encoder(
-                torch.zeros_like(image), output_hidden_states=True
-            ).hidden_states[-2]
-            uncond_image_enc_hidden_states = uncond_image_enc_hidden_states.repeat_interleave(
-                num_images_per_prompt, dim=0
+    @torch.no_grad()
+    # Modified from diffusers.pipelines.ledits_pp.pipeline_leditspp_stable_diffusion.LEditsPPPipelineStableDiffusion.encode_image
+    def encode_image(self, image, dtype=None, height=None, width=None, resize_mode="default", crops_coords=None):
+        image = self.image_processor.preprocess(
+            image=image, height=height, width=width, resize_mode=resize_mode, crops_coords=crops_coords
+        )
+        height, width = image.shape[-2:]
+        if height % 32 != 0 or width % 32 != 0:
+            raise ValueError(
+                "Image height and width must be a factor of 32. "
+                "Consider down-sampling the input using the `height` and `width` parameters"
             )
-            return image_enc_hidden_states, uncond_image_enc_hidden_states
-        else:
-            image_embeds = self.image_encoder(image).image_embeds
-            image_embeds = image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-            uncond_image_embeds = torch.zeros_like(image_embeds)
+        resized = self.image_processor.postprocess(image=image, output_type="pil")
 
-            return image_embeds, uncond_image_embeds
+        if max(image.shape[-2:]) > self.vae.config["sample_size"] * 1.5:
+            logger.warning(
+                "Your input images far exceed the default resolution of the underlying diffusion model. "
+                "The output images may contain severe artifacts! "
+                "Consider down-sampling the input using the `height` and `width` parameters"
+            )
+        image = image.to(self.device, dtype=dtype)
+        needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
+
+        if needs_upcasting:
+            image = image.float()
+            self.upcast_vae()
+
+        x0 = self.vae.encode(image).latent_dist.mode()
+        x0 = x0.to(dtype)
+        # cast back to fp16 if needed
+        if needs_upcasting:
+            self.vae.to(dtype=torch.float16)
+
+        x0 = self.vae.config.scaling_factor * x0
+        return x0, resized
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_ip_adapter_image_embeds
     def prepare_ip_adapter_image_embeds(
