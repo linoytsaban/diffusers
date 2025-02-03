@@ -308,16 +308,15 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
                 negative_pooled_prompt_embeds = output.hidden_states[-1][-1, :, :].clone()
 
-                if enable_edit_guidance:
-                    # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
-                    seq_len = negative_prompt_embeds.shape[1]
+                # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
+                seq_len = negative_prompt_embeds.shape[1]
 
-                    negative_prompt_embeds = negative_prompt_embeds.to(dtype=text_encoder.dtype, device=device)
+                negative_prompt_embeds = negative_prompt_embeds.to(dtype=text_encoder.dtype, device=device)
 
-                    negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
-                    negative_prompt_embeds = negative_prompt_embeds.view(
-                        batch_size * num_images_per_prompt, seq_len, -1
-                    )
+                negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+                negative_prompt_embeds = negative_prompt_embeds.view(
+                    batch_size * num_images_per_prompt, seq_len, -1
+                )
 
                 negative_prompt_embeds_list.append(negative_prompt_embeds)
 
