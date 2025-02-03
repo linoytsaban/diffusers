@@ -259,12 +259,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         # from IPython import embed; embed(); exit()
         device = device or self._execution_device
 
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+       batch_size = 1 # todo change
 
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer]
