@@ -21,7 +21,7 @@ from ...callbacks import MultiPipelineCallbacks, PipelineCallback
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import IPAdapterMixin, StableDiffusionXLLoraLoaderMixin
 from ...models import AutoencoderKL, ImageProjection, UNet2DConditionModel
-from ...models.attention_processor import AttnProcessor2_0, FusedAttnProcessor2_0, XFormersAttnProcessor
+from ...models.attention_processor import AttnProcessor, AttnProcessor2_0, FusedAttnProcessor2_0, XFormersAttnProcessor
 from ...schedulers import KarrasDiffusionSchedulers
 from ...utils import is_torch_xla_available, logging, replace_example_docstring
 from ...utils.torch_utils import randn_tensor
@@ -121,7 +121,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLLoraLoaderMixin, IPAdapterMixin):
+class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLLoraLoaderMixin, IPAdapterMixin):
     r"""
     Pipeline for text-to-image generation using Kolors.
 
@@ -197,17 +197,31 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
             else 128
         )
 
+        if not isinstance(scheduler, DPMSolverMultistepScheduler):
+            self.scheduler = DPMSolverMultistepScheduler.from_config(
+                scheduler.config, algorithm_type="sde-dpmsolver++", solver_order=2
+            )
+            logger.warning(
+                "This pipeline only supports DPMSolverMultistepScheduler. "
+                "The scheduler has been changed to DPMSolverMultistepScheduler."
+            )
+        self.inversion_steps = None
+
     def encode_prompt(
         self,
-        prompt,
+        # prompt,
         device: Optional[torch.device] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt=None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        pooled_prompt_embeds: Optional[torch.Tensor] = None,
+        # prompt_embeds: Optional[torch.FloatTensor] = None,
+        # pooled_prompt_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
+        enable_edit_guidance: bool = True,
+        editing_prompt: Optional[str] = None,
+        editing_prompt_embeds: Optional[torch.Tensor] = None,
+        editing_pooled_prompt_embeds: Optional[torch.Tensor] = None,
         max_sequence_length: int = 256,
     ):
         r"""
@@ -255,43 +269,14 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
         # Define tokenizers and text encoders
         tokenizers = [self.tokenizer]
         text_encoders = [self.text_encoder]
-
-        if prompt_embeds is None:
-            prompt_embeds_list = []
-            for tokenizer, text_encoder in zip(tokenizers, text_encoders):
-                text_inputs = tokenizer(
-                    prompt,
-                    padding="max_length",
-                    max_length=max_sequence_length,
-                    truncation=True,
-                    return_tensors="pt",
-                ).to(device)
-                output = text_encoder(
-                    input_ids=text_inputs["input_ids"],
-                    attention_mask=text_inputs["attention_mask"],
-                    position_ids=text_inputs["position_ids"],
-                    output_hidden_states=True,
-                )
-
-                # [max_sequence_length, batch, hidden_size] -> [batch, max_sequence_length, hidden_size]
-                # clone to have a contiguous tensor
-                prompt_embeds = output.hidden_states[-2].permute(1, 0, 2).clone()
-                # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
-                pooled_prompt_embeds = output.hidden_states[-1][-1, :, :].clone()
-                bs_embed, seq_len, _ = prompt_embeds.shape
-                prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-                prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
-
-                prompt_embeds_list.append(prompt_embeds)
-
-            prompt_embeds = prompt_embeds_list[0]
+        num_edit_tokens = 0
 
         # get unconditional embeddings for classifier free guidance
         zero_out_negative_prompt = negative_prompt is None and self.config.force_zeros_for_empty_prompt
 
-        if do_classifier_free_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
+        if enable_edit_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
             negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-        elif do_classifier_free_guidance and negative_prompt_embeds is None:
+        elif enable_edit_guidance and negative_prompt_embeds is None:
             uncond_tokens: List[str]
             if negative_prompt is None:
                 uncond_tokens = [""] * batch_size
@@ -349,17 +334,57 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
 
             negative_prompt_embeds = negative_prompt_embeds_list[0]
 
-        bs_embed = pooled_prompt_embeds.shape[0]
-        pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
+        if enable_edit_guidance and editing_prompt_embeds is None:
+            edit_prompt_embeds_list = []
+            for tokenizer, text_encoder in zip(tokenizers, text_encoders):
+                edit_concepts_input = tokenizer(
+                    editing_prompt,
+                    padding="max_length",
+                    max_length=max_sequence_length,
+                    truncation=True,
+                    return_tensors="pt",
+                ).to(device)
+                num_edit_tokens = edit_concepts_input.length - 2
+                edit_concepts_embeds = text_encoder(
+                    input_ids=edit_concepts_input["input_ids"],
+                    attention_mask=text_inputs["attention_mask"],
+                    position_ids=text_inputs["position_ids"],
+                    output_hidden_states=True,
+                )
+                # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
+                pooled_prompt_embeds = edit_concepts_embeds.hidden_states[-1][-1, :, :].clone()
+                # [max_sequence_length, batch, hidden_size] -> [batch, max_sequence_length, hidden_size]
+                # clone to have a contiguous tensor
+                edit_concepts_embeds = edit_concepts_embeds.hidden_states[-2].permute(1, 0, 2).clone()
+
+                bs_embed, seq_len, _ = edit_concepts_embeds.shape
+                edit_concepts_embeds = edit_concepts_embeds.repeat(1, num_images_per_prompt, 1)
+                edit_concepts_embeds = edit_concepts_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+
+                edit_prompt_embeds_list.append(edit_concepts_embeds)
+
+            edit_concepts_embeds = edit_prompt_embeds_list[0]
+
+        elif not enable_edit_guidance:
+            edit_concepts_embeds = None
+            editing_pooled_prompt_embeds = None
+
+        bs_embed = negative_pooled_prompt_embeds.shape[0]
+        negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
             bs_embed * num_images_per_prompt, -1
         )
 
-        if do_classifier_free_guidance:
-            negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
-                bs_embed * num_images_per_prompt, -1
+        if enable_edit_guidance:
+            bs_embed_edit = edit_concepts_embeds.shape[0]
+            editing_pooled_prompt_embeds = editing_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
+                bs_embed_edit * num_images_per_prompt, -1
             )
 
-        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+        return (edit_concepts_embeds,
+                negative_prompt_embeds,
+                editing_pooled_prompt_embeds,
+                negative_pooled_prompt_embeds,
+                num_edit_tokens)
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.encode_image
     def encode_image(self, image, device, num_images_per_prompt, output_hidden_states=None):
@@ -1164,7 +1189,7 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
         # 1. prepare image
         x0, resized = self.encode_image(
             image,
-            dtype=self.text_encoder_2.dtype,
+            dtype=self.text_encoder.dtype,
             height=height,
             width=width,
             resize_mode=resize_mode,
@@ -1177,9 +1202,6 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
         self.batch_size = x0.shape[0]
 
         # 2. get embeddings
-        text_encoder_lora_scale = (
-            cross_attention_kwargs.get("scale", None) if cross_attention_kwargs is not None else None
-        )
 
         if isinstance(source_prompt, str):
             source_prompt = [source_prompt] * self.batch_size
@@ -1194,15 +1216,10 @@ class KolorsPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiffusionXLL
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             negative_prompt=negative_prompt,
-            negative_prompt_2=negative_prompt_2,
             editing_prompt=source_prompt,
-            lora_scale=text_encoder_lora_scale,
             enable_edit_guidance=do_classifier_free_guidance,
         )
-        if self.text_encoder_2 is None:
-            text_encoder_projection_dim = int(negative_pooled_prompt_embeds.shape[-1])
-        else:
-            text_encoder_projection_dim = self.text_encoder_2.config.projection_dim
+        text_encoder_projection_dim = int(negative_pooled_prompt_embeds.shape[-1])
 
         # 3. Prepare added time ids & embeddings
         add_text_embeds = negative_pooled_prompt_embeds
