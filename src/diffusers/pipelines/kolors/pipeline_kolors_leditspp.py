@@ -509,8 +509,9 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     max_length=max_sequence_length,
                     truncation=True,
                     return_tensors="pt",
+                    return_length=True,
                 ).to(device)
-                num_edit_tokens = len(edit_concepts_input) - 2 #verify
+                num_edit_tokens = len(edit_concepts_input).length - 2
                 edit_concepts_embeds = text_encoder(
                     input_ids=edit_concepts_input["input_ids"],
                     attention_mask=edit_concepts_input["attention_mask"],
@@ -1389,12 +1390,12 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                                 is_cross=True,
                                 select=self.text_cross_attention_maps.index(editing_prompt[c]),
                             )
-                            attn_map = out[:, :, :, 1: 1 + num_edit_tokens]  # 0 -> startoftext
+                            attn_map = out[:, :, :, 1: 1 + num_edit_tokens[c]]  # 0 -> startoftext
 
                             # average over all tokens
-                            if attn_map.shape[3] != num_edit_tokens:
+                            if attn_map.shape[3] != num_edit_tokens[c]:
                                 raise ValueError(
-                                    f"Incorrect shape of attention_map. Expected size {num_edit_tokens}, but found {attn_map.shape[3]}!"
+                                    f"Incorrect shape of attention_map. Expected size {num_edit_tokens[c]}, but found {attn_map.shape[3]}!"
                                 )
                             attn_map = torch.sum(attn_map, dim=3)
 
