@@ -1,4 +1,4 @@
-# Copyright 2024 Black Forest Labs, The HuggingFace Team and The InstantX Team. All rights reserved.
+# Copyright 2024 Black Forest Labs, The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union, List
 
 import numpy as np
 import torch
@@ -90,23 +90,31 @@ class FluxSingleTransformerBlock(nn.Module):
         temb: torch.Tensor,
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        step_index=None,
+        index_block=None,
+        single_copy_blocks=None,
+        single_skip_blocks=None,
     ) -> torch.Tensor:
-        residual = hidden_states
-        norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
-        mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
-        joint_attention_kwargs = joint_attention_kwargs or {}
-        attn_output = self.attn(
-            hidden_states=norm_hidden_states,
-            image_rotary_emb=image_rotary_emb,
-            **joint_attention_kwargs,
-        )
+        if single_skip_blocks is None or index_block not in single_skip_blocks:
+            residual = hidden_states
+            norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
+            mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
+            joint_attention_kwargs = joint_attention_kwargs or {}
+            attn_output = self.attn(
+                hidden_states=norm_hidden_states,
+                image_rotary_emb=image_rotary_emb,
+                step_index=step_index,
+                index_block=index_block,
+                single_copy_blocks=single_copy_blocks,
+                **joint_attention_kwargs,
+            )
 
-        hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
-        gate = gate.unsqueeze(1)
-        hidden_states = gate * self.proj_out(hidden_states)
-        hidden_states = residual + hidden_states
-        if hidden_states.dtype == torch.float16:
-            hidden_states = hidden_states.clip(-65504, 65504)
+            hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
+            gate = gate.unsqueeze(1)
+            hidden_states = gate * self.proj_out(hidden_states)
+            hidden_states = residual + hidden_states
+            if hidden_states.dtype == torch.float16:
+                hidden_states = hidden_states.clip(-65504, 65504)
 
         return hidden_states
 
@@ -177,52 +185,61 @@ class FluxTransformerBlock(nn.Module):
         temb: torch.Tensor,
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        step_index=None,
+        index_block=None,
+        mm_copy_blocks=None,
+        mm_skip_blocks=None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
+        if mm_skip_blocks is None or index_block not in mm_skip_blocks:
+            norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-            encoder_hidden_states, emb=temb
-        )
-        joint_attention_kwargs = joint_attention_kwargs or {}
-        # Attention.
-        attention_outputs = self.attn(
-            hidden_states=norm_hidden_states,
-            encoder_hidden_states=norm_encoder_hidden_states,
-            image_rotary_emb=image_rotary_emb,
-            **joint_attention_kwargs,
-        )
+            norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
+                encoder_hidden_states, emb=temb
+            )
+            joint_attention_kwargs = joint_attention_kwargs or {}
 
-        if len(attention_outputs) == 2:
-            attn_output, context_attn_output = attention_outputs
-        elif len(attention_outputs) == 3:
-            attn_output, context_attn_output, ip_attn_output = attention_outputs
+            # Attention.
+            attention_outputs = self.attn(
+                hidden_states=norm_hidden_states,
+                encoder_hidden_states=norm_encoder_hidden_states,
+                image_rotary_emb=image_rotary_emb,
+                step_index=step_index,
+                index_block=index_block,
+                mm_copy_blocks=mm_copy_blocks,
+                **joint_attention_kwargs,
+            )
 
-        # Process attention outputs for the `hidden_states`.
-        attn_output = gate_msa.unsqueeze(1) * attn_output
-        hidden_states = hidden_states + attn_output
+            if len(attention_outputs) == 2:
+                attn_output, context_attn_output = attention_outputs
+            elif len(attention_outputs) == 3:
+                attn_output, context_attn_output, ip_attn_output = attention_outputs
 
-        norm_hidden_states = self.norm2(hidden_states)
-        norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            # Process attention outputs for the `hidden_states`.
+            attn_output = gate_msa.unsqueeze(1) * attn_output
+            hidden_states = hidden_states + attn_output
 
-        ff_output = self.ff(norm_hidden_states)
-        ff_output = gate_mlp.unsqueeze(1) * ff_output
+            norm_hidden_states = self.norm2(hidden_states)
+            norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
 
-        hidden_states = hidden_states + ff_output
-        if len(attention_outputs) == 3:
-            hidden_states = hidden_states + ip_attn_output
+            ff_output = self.ff(norm_hidden_states)
+            ff_output = gate_mlp.unsqueeze(1) * ff_output
 
-        # Process attention outputs for the `encoder_hidden_states`.
+            hidden_states = hidden_states + ff_output
+            if len(attention_outputs) == 3:
+                hidden_states = hidden_states + ip_attn_output
 
-        context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
-        encoder_hidden_states = encoder_hidden_states + context_attn_output
+            # Process attention outputs for the `encoder_hidden_states`.
 
-        norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
-        norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+            context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
+            encoder_hidden_states = encoder_hidden_states + context_attn_output
 
-        context_ff_output = self.ff_context(norm_encoder_hidden_states)
-        encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
-        if encoder_hidden_states.dtype == torch.float16:
-            encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
+            norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
+            norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+
+            context_ff_output = self.ff_context(norm_encoder_hidden_states)
+            encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
+            if encoder_hidden_states.dtype == torch.float16:
+                encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
 
         return encoder_hidden_states, hidden_states
 
@@ -437,6 +454,11 @@ class FluxTransformer2DModel(
         controlnet_single_block_samples=None,
         return_dict: bool = True,
         controlnet_blocks_repeat: bool = False,
+        step_index: int = None,
+        mm_copy_blocks=None,
+        single_copy_blocks=None,
+        mm_skip_blocks=None,
+        single_skip_blocks=None,
     ) -> Union[torch.Tensor, Transformer2DModelOutput]:
         """
         The [`FluxTransformer2DModel`] forward method.
@@ -531,6 +553,10 @@ class FluxTransformer2DModel(
                     encoder_hidden_states=encoder_hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
+                    step_index=step_index,
+                    index_block=index_block,
+                    mm_copy_blocks=mm_copy_blocks,
+                    mm_skip_blocks=mm_skip_blocks,
                     joint_attention_kwargs=joint_attention_kwargs,
                 )
 
@@ -561,6 +587,10 @@ class FluxTransformer2DModel(
                     hidden_states=hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
+                    step_index=step_index,
+                    index_block=index_block,
+                    single_copy_blocks=single_copy_blocks,
+                    single_skip_blocks=single_skip_blocks,
                     joint_attention_kwargs=joint_attention_kwargs,
                 )
 
