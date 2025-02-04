@@ -1515,6 +1515,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     )
 
                 idx = t_to_idx[int(t)]
+                latents_dtype = latents.dtype
                 latents = self.scheduler.step(
                     noise_pred, t, latents, variance_noise=zs[idx], **extra_step_kwargs, return_dict=False
                 )[0]
