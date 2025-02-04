@@ -862,7 +862,6 @@ class FluxPipeline(
             self.scheduler,
             num_inference_steps,
             device,
-            timesteps,
             sigmas=sigmas,
             mu=mu,
         )
