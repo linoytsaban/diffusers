@@ -52,17 +52,34 @@ EXAMPLE_DOC_STRING = """
     Examples:
         ```py
         >>> import torch
-        >>> from diffusers import KolorsPipeline
 
-        >>> pipe = KolorsPipeline.from_pretrained(
-        ...     "Kwai-Kolors/Kolors-diffusers", variant="fp16", torch_dtype=torch.float16
+        >>> from diffusers import KolorsLEditsPPPipeline
+        >>> from diffusers.utils import load_image
+        >>> from diffusers import DiffusionPipeline, AutoencoderKL, DDIMScheduler
+        
+        >>> vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+        
+        >>> pipe = KolorsLEditsPPPipeline.from_pretrained(
+        ...     "Kwai-Kolors/Kolors-diffusers", variant="fp16", torch_dtype=torch.float16, vae=vae
         ... )
+        # pipe.scheduler = DDIMScheduler.from_config(
+        #     pipe.scheduler.config
+        # )
+        # >>> pipe.enable_vae_tiling()
         >>> pipe = pipe.to("cuda")
+        
+        >>> img_url = "https://www.aiml.informatik.tu-darmstadt.de/people/mbrack/tennis.jpg"
+        >>> image = load_image(img_url).resize((512, 512))
+        
+        >>> _ = pipe.invert(image=image, num_inversion_steps=50, skip=0.2)
+        
+        >>> edited_image = pipe(
+        ...     editing_prompt=["tomato"],
+        ...     reverse_editing_direction=[False],
+        ...     edit_guidance_scale=[7],
+        ...     edit_threshold=[0.9],
+        ... ).images[0]
 
-        >>> prompt = (
-        ...     "A photo of a ladybug, macro, zoom, high quality, film, holding a wooden sign with the text 'KOLORS'"
-        ... )
-        >>> image = pipe(prompt).images[0]
         ```
 """
 
