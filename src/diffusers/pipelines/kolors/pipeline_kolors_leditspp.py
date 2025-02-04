@@ -1658,6 +1658,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
             raise ValueError("height and width must be a factor of 32.")
 
         # Reset attn processor, we do not want to store attn maps during inversion
+        self.attention_store = []
         self.unet.set_attn_processor(AttnProcessor())
 
         self.eta = 1.0
