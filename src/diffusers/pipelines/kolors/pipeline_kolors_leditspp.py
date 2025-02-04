@@ -512,8 +512,8 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 num_edit_tokens = len(edit_concepts_input) - 2 #verify
                 edit_concepts_embeds = text_encoder(
                     input_ids=edit_concepts_input["input_ids"],
-                    attention_mask=text_inputs["attention_mask"],
-                    position_ids=text_inputs["position_ids"],
+                    attention_mask=edit_concepts_input["attention_mask"],
+                    position_ids=edit_concepts_input["position_ids"],
                     output_hidden_states=True,
                 )
                 # [max_sequence_length, batch, hidden_size] -> [batch, hidden_size]
