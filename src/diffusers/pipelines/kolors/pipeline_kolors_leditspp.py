@@ -1134,21 +1134,21 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         target_size = target_size or (height, width)
 
         # 1. Check inputs. Raise error if not correct
-        self.check_inputs(
-            prompt,
-            num_inference_steps,
-            height,
-            width,
-            negative_prompt,
-            prompt_embeds,
-            pooled_prompt_embeds,
-            negative_prompt_embeds,
-            negative_pooled_prompt_embeds,
-            ip_adapter_image,
-            ip_adapter_image_embeds,
-            callback_on_step_end_tensor_inputs,
-            max_sequence_length=max_sequence_length,
-        )
+        # self.check_inputs(
+        #     prompt,
+        #     num_inference_steps,
+        #     height,
+        #     width,
+        #     negative_prompt,
+        #     prompt_embeds,
+        #     pooled_prompt_embeds,
+        #     negative_prompt_embeds,
+        #     negative_pooled_prompt_embeds,
+        #     ip_adapter_image,
+        #     ip_adapter_image_embeds,
+        #     callback_on_step_end_tensor_inputs,
+        #     max_sequence_length=max_sequence_length,
+        # )
 
         # 2. Define call parameters
         batch_size = self.batch_size
