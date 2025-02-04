@@ -1506,12 +1506,12 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 noise_pred = noise_pred_uncond + noise_guidance_edit
 
                 # compute the previous noisy sample x_t -> x_t-1
-                if enable_edit_guidance and self.guidance_rescale > 0.0:
+                if enable_edit_guidance and self._guidance_rescale > 0.0:
                     # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
                     noise_pred = rescale_noise_cfg(
                         noise_pred,
                         noise_pred_edit_concepts.mean(dim=0, keepdim=False),
-                        guidance_rescale=self.guidance_rescale,
+                        guidance_rescale=self._guidance_rescale,
                     )
 
                 idx = t_to_idx[int(t)]
