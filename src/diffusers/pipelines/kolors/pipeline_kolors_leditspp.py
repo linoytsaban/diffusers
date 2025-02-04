@@ -654,7 +654,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         return ip_adapter_image_embeds
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
-    def prepare_extra_step_kwargs(self, generator, eta):
+    def prepare_extra_step_kwargs(self, eta, generator=None):
         # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
         # eta (η) is only used with the DDIMScheduler, it will be ignored for other schedulers.
         # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
@@ -757,24 +757,32 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         if max_sequence_length is not None and max_sequence_length > 256:
             raise ValueError(f"`max_sequence_length` cannot be greater than 256 but is {max_sequence_length}")
 
-    # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
-    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
-        shape = (
-            batch_size,
-            num_channels_latents,
-            int(height) // self.vae_scale_factor,
-            int(width) // self.vae_scale_factor,
-        )
-        if isinstance(generator, list) and len(generator) != batch_size:
-            raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
-            )
+    # # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
+    # def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
+    #     shape = (
+    #         batch_size,
+    #         num_channels_latents,
+    #         int(height) // self.vae_scale_factor,
+    #         int(width) // self.vae_scale_factor,
+    #     )
+    #     if isinstance(generator, list) and len(generator) != batch_size:
+    #         raise ValueError(
+    #             f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
+    #             f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+    #         )
+    #
+    #     if latents is None:
+    #         latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+    #     else:
+    #         latents = latents.to(device)
+    #
+    #     # scale the initial noise by the standard deviation required by the scheduler
+    #     latents = latents * self.scheduler.init_noise_sigma
+    #     return latents
 
-        if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
-        else:
-            latents = latents.to(device)
+    # Modified from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
+    def prepare_latents(self, device, latents):
+        latents = latents.to(device)
 
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
@@ -926,6 +934,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        guidance_rescale: float = 0.0,
         original_size: Optional[Tuple[int, int]] = None,
         crops_coords_top_left: Tuple[int, int] = (0, 0),
         target_size: Optional[Tuple[int, int]] = None,
@@ -1112,9 +1121,9 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
         if user_mask is not None:
             user_mask = user_mask.to(self.device)
 
-        # 0. Default height and width to unet
-        height = height or self.default_sample_size * self.vae_scale_factor
-        width = width or self.default_sample_size * self.vae_scale_factor
+        # # 0. Default height and width to unet
+        # height = height or self.default_sample_size * self.vae_scale_factor
+        # width = width or self.default_sample_size * self.vae_scale_factor
 
         original_size = original_size or (height, width)
         target_size = target_size or (height, width)
@@ -1136,86 +1145,101 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
             max_sequence_length=max_sequence_length,
         )
 
+        # 2. Define call parameters
+        batch_size = self.batch_size
+
         self._guidance_scale = guidance_scale
+        self._guidance_rescale = guidance_rescale
         self._cross_attention_kwargs = cross_attention_kwargs
         self._denoising_end = denoising_end
         self._interrupt = False
 
-        # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
         device = self._execution_device
+
+        if editing_prompt:
+            enable_edit_guidance = True
+            if isinstance(editing_prompt, str):
+                editing_prompt = [editing_prompt]
+            self.enabled_editing_prompts = len(editing_prompt)
+        elif editing_prompt_embeddings is not None:
+            enable_edit_guidance = True
+            self.enabled_editing_prompts = editing_prompt_embeddings.shape[0]
+        else:
+            self.enabled_editing_prompts = 0
+            enable_edit_guidance = False
 
         # 3. Encode input prompt
         (
             prompt_embeds,
-            negative_prompt_embeds,
-            pooled_prompt_embeds,
+            edit_prompt_embeds,
             negative_pooled_prompt_embeds,
+            pooled_edit_embeds,
+            num_edit_tokens,
         ) = self.encode_prompt(
-            prompt=prompt,
             device=device,
             num_images_per_prompt=num_images_per_prompt,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
             negative_prompt=negative_prompt,
-            prompt_embeds=prompt_embeds,
             pooled_prompt_embeds=pooled_prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+            enable_edit_guidance=enable_edit_guidance,
+            editing_prompt=editing_prompt,
+            editing_prompt_embeds=editing_prompt_embeddings,
+            editing_pooled_prompt_embeds=editing_pooled_prompt_embeds,
         )
 
         # 4. Prepare timesteps
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler, num_inference_steps, device, timesteps, sigmas
-        )
+        # timesteps, num_inference_steps = retrieve_timesteps(
+        #     self.scheduler, num_inference_steps, device, timesteps, sigmas
+        # )
+        timesteps = self.inversion_steps
+        t_to_idx = {int(v): k for k, v in enumerate(timesteps)}
+
+        if use_cross_attn_mask:
+            self.attention_store = LeditsAttentionStore(
+                average=store_averaged_over_steps,
+                batch_size=batch_size,
+                max_size=(latents.shape[-2] / 4.0) * (latents.shape[-1] / 4.0),
+                max_resolution=None,
+            )
+            self.prepare_unet(self.attention_store)
+            resolution = latents.shape[-2:]
+            att_res = (int(resolution[0] / 4), int(resolution[1] / 4))
 
         # 5. Prepare latent variables
-        num_channels_latents = self.unet.config.in_channels
-        latents = self.prepare_latents(
-            batch_size * num_images_per_prompt,
-            num_channels_latents,
-            height,
-            width,
-            prompt_embeds.dtype,
-            device,
-            generator,
-            latents,
-        )
+        latents = self.prepare_latents(device=device, latents=latents)
 
-        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+        # 6. Prepare extra step kwargs.
+        extra_step_kwargs = self.prepare_extra_step_kwargs(eta)
 
         # 7. Prepare added time ids & embeddings
-        add_text_embeds = pooled_prompt_embeds
-        text_encoder_projection_dim = int(pooled_prompt_embeds.shape[-1])
+        add_text_embeds = negative_pooled_prompt_embeds
+        text_encoder_projection_dim = int(negative_pooled_prompt_embeds.shape[-1])
 
         add_time_ids = self._get_add_time_ids(
-            original_size,
+            self.size,
             crops_coords_top_left,
-            target_size,
-            dtype=prompt_embeds.dtype,
+            self.size,
+            dtype=negative_pooled_prompt_embeds.dtype,
             text_encoder_projection_dim=text_encoder_projection_dim,
         )
-        if negative_original_size is not None and negative_target_size is not None:
-            negative_add_time_ids = self._get_add_time_ids(
-                negative_original_size,
-                negative_crops_coords_top_left,
-                negative_target_size,
-                dtype=prompt_embeds.dtype,
-                text_encoder_projection_dim=text_encoder_projection_dim,
-            )
-        else:
-            negative_add_time_ids = add_time_ids
+        # if negative_original_size is not None and negative_target_size is not None:
+        #     negative_add_time_ids = self._get_add_time_ids(
+        #         negative_original_size,
+        #         negative_crops_coords_top_left,
+        #         negative_target_size,
+        #         dtype=prompt_embeds.dtype,
+        #         text_encoder_projection_dim=text_encoder_projection_dim,
+        #     )
+        # else:
+        #     negative_add_time_ids = add_time_ids
 
-        if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
+        if enable_edit_guidance:
+            prompt_embeds = torch.cat([prompt_embeds, edit_prompt_embeds], dim=0)
+            add_text_embeds = torch.cat([add_text_embeds, pooled_edit_embeds], dim=0)
+            edit_concepts_time_ids = add_time_ids.repeat(edit_prompt_embeds.shape[0], 1)
+            add_time_ids = torch.cat([add_time_ids, edit_concepts_time_ids], dim=0)
+            self.text_cross_attention_maps = [editing_prompt] if isinstance(editing_prompt, str) else editing_prompt
 
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
@@ -1229,9 +1253,13 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                 batch_size * num_images_per_prompt,
                 self.do_classifier_free_guidance,
             )
+            if self.do_classifier_free_guidance:
+                image_embeds = torch.cat([negative_image_embeds, image_embeds])
+                image_embeds = image_embeds.to(device)
 
         # 8. Denoising loop
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
+        self.sem_guidance = None
+        self.activation_mask = None
 
         # 8.1 Apply denoising_end
         if (
@@ -1264,8 +1292,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     continue
 
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-
+                latent_model_input = torch.cat([latents] * (1 + self.enabled_editing_prompts))
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 # predict the noise residual
@@ -1278,20 +1305,221 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     latent_model_input,
                     t,
                     encoder_hidden_states=prompt_embeds,
-                    timestep_cond=timestep_cond,
-                    cross_attention_kwargs=self.cross_attention_kwargs,
+                    timestep_cond=timestep_cond,#not sure
+                    cross_attention_kwargs=cross_attention_kwargs,
                     added_cond_kwargs=added_cond_kwargs,
                     return_dict=False,
                 )[0]
 
-                # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
+                noise_pred_out = noise_pred.chunk(1 + self.enabled_editing_prompts)  # [b,4, 64, 64]
+                noise_pred_uncond = noise_pred_out[0]
+                noise_pred_edit_concepts = noise_pred_out[1:]
+
+                noise_guidance_edit = torch.zeros(
+                    noise_pred_uncond.shape,
+                    device=self.device,
+                    dtype=noise_pred_uncond.dtype,
+                )
+
+                if sem_guidance is not None and len(sem_guidance) > i:
+                    noise_guidance_edit += sem_guidance[i].to(self.device)
+
+                elif enable_edit_guidance:
+                    if self.activation_mask is None:
+                        self.activation_mask = torch.zeros(
+                            (len(timesteps), self.enabled_editing_prompts, *noise_pred_edit_concepts[0].shape)
+                        )
+                    if self.sem_guidance is None:
+                        self.sem_guidance = torch.zeros((len(timesteps), *noise_pred_uncond.shape))
+
+                    # noise_guidance_edit = torch.zeros_like(noise_guidance)
+                    for c, noise_pred_edit_concept in enumerate(noise_pred_edit_concepts):
+                        if isinstance(edit_warmup_steps, list):
+                            edit_warmup_steps_c = edit_warmup_steps[c]
+                        else:
+                            edit_warmup_steps_c = edit_warmup_steps
+                        if i < edit_warmup_steps_c:
+                            continue
+
+                        if isinstance(edit_guidance_scale, list):
+                            edit_guidance_scale_c = edit_guidance_scale[c]
+                        else:
+                            edit_guidance_scale_c = edit_guidance_scale
+
+                        if isinstance(edit_threshold, list):
+                            edit_threshold_c = edit_threshold[c]
+                        else:
+                            edit_threshold_c = edit_threshold
+                        if isinstance(reverse_editing_direction, list):
+                            reverse_editing_direction_c = reverse_editing_direction[c]
+                        else:
+                            reverse_editing_direction_c = reverse_editing_direction
+
+                        if isinstance(edit_cooldown_steps, list):
+                            edit_cooldown_steps_c = edit_cooldown_steps[c]
+                        elif edit_cooldown_steps is None:
+                            edit_cooldown_steps_c = i + 1
+                        else:
+                            edit_cooldown_steps_c = edit_cooldown_steps
+
+                        if i >= edit_cooldown_steps_c:
+                            continue
+
+                        noise_guidance_edit_tmp = noise_pred_edit_concept - noise_pred_uncond
+
+                        if reverse_editing_direction_c:
+                            noise_guidance_edit_tmp = noise_guidance_edit_tmp * -1
+
+                        noise_guidance_edit_tmp = noise_guidance_edit_tmp * edit_guidance_scale_c
+
+                        if user_mask is not None:
+                            noise_guidance_edit_tmp = noise_guidance_edit_tmp * user_mask
+
+                        if use_cross_attn_mask:
+                            out = self.attention_store.aggregate_attention(
+                                attention_maps=self.attention_store.step_store,
+                                prompts=self.text_cross_attention_maps,
+                                res=att_res,
+                                from_where=["up", "down"],
+                                is_cross=True,
+                                select=self.text_cross_attention_maps.index(editing_prompt[c]),
+                            )
+                            attn_map = out[:, :, :, 1: 1 + num_edit_tokens[c]]  # 0 -> startoftext
+
+                            # average over all tokens
+                            if attn_map.shape[3] != num_edit_tokens[c]:
+                                raise ValueError(
+                                    f"Incorrect shape of attention_map. Expected size {num_edit_tokens[c]}, but found {attn_map.shape[3]}!"
+                                )
+                            attn_map = torch.sum(attn_map, dim=3)
+
+                            # gaussian_smoothing
+                            attn_map = F.pad(attn_map.unsqueeze(1), (1, 1, 1, 1), mode="reflect")
+                            attn_map = self.smoothing(attn_map).squeeze(1)
+
+                            # torch.quantile function expects float32
+                            if attn_map.dtype == torch.float32:
+                                tmp = torch.quantile(attn_map.flatten(start_dim=1), edit_threshold_c, dim=1)
+                            else:
+                                tmp = torch.quantile(
+                                    attn_map.flatten(start_dim=1).to(torch.float32), edit_threshold_c, dim=1
+                                ).to(attn_map.dtype)
+                            attn_mask = torch.where(
+                                attn_map >= tmp.unsqueeze(1).unsqueeze(1).repeat(1, *att_res), 1.0, 0.0
+                            )
+
+                            # resolution must match latent space dimension
+                            attn_mask = F.interpolate(
+                                attn_mask.unsqueeze(1),
+                                noise_guidance_edit_tmp.shape[-2:],  # 64,64
+                            ).repeat(1, 4, 1, 1)
+                            self.activation_mask[i, c] = attn_mask.detach().cpu()
+                            if not use_intersect_mask:
+                                noise_guidance_edit_tmp = noise_guidance_edit_tmp * attn_mask
+
+                        if use_intersect_mask:
+                            noise_guidance_edit_tmp_quantile = torch.abs(noise_guidance_edit_tmp)
+                            noise_guidance_edit_tmp_quantile = torch.sum(
+                                noise_guidance_edit_tmp_quantile, dim=1, keepdim=True
+                            )
+                            noise_guidance_edit_tmp_quantile = noise_guidance_edit_tmp_quantile.repeat(
+                                1, self.unet.config.in_channels, 1, 1
+                            )
+
+                            # torch.quantile function expects float32
+                            if noise_guidance_edit_tmp_quantile.dtype == torch.float32:
+                                tmp = torch.quantile(
+                                    noise_guidance_edit_tmp_quantile.flatten(start_dim=2),
+                                    edit_threshold_c,
+                                    dim=2,
+                                    keepdim=False,
+                                )
+                            else:
+                                tmp = torch.quantile(
+                                    noise_guidance_edit_tmp_quantile.flatten(start_dim=2).to(torch.float32),
+                                    edit_threshold_c,
+                                    dim=2,
+                                    keepdim=False,
+                                ).to(noise_guidance_edit_tmp_quantile.dtype)
+
+                            intersect_mask = (
+                                    torch.where(
+                                        noise_guidance_edit_tmp_quantile >= tmp[:, :, None, None],
+                                        torch.ones_like(noise_guidance_edit_tmp),
+                                        torch.zeros_like(noise_guidance_edit_tmp),
+                                    )
+                                    * attn_mask
+                            )
+
+                            self.activation_mask[i, c] = intersect_mask.detach().cpu()
+
+                            noise_guidance_edit_tmp = noise_guidance_edit_tmp * intersect_mask
+
+                        elif not use_cross_attn_mask:
+                            # calculate quantile
+                            noise_guidance_edit_tmp_quantile = torch.abs(noise_guidance_edit_tmp)
+                            noise_guidance_edit_tmp_quantile = torch.sum(
+                                noise_guidance_edit_tmp_quantile, dim=1, keepdim=True
+                            )
+                            noise_guidance_edit_tmp_quantile = noise_guidance_edit_tmp_quantile.repeat(1, 4, 1, 1)
+
+                            # torch.quantile function expects float32
+                            if noise_guidance_edit_tmp_quantile.dtype == torch.float32:
+                                tmp = torch.quantile(
+                                    noise_guidance_edit_tmp_quantile.flatten(start_dim=2),
+                                    edit_threshold_c,
+                                    dim=2,
+                                    keepdim=False,
+                                )
+                            else:
+                                tmp = torch.quantile(
+                                    noise_guidance_edit_tmp_quantile.flatten(start_dim=2).to(torch.float32),
+                                    edit_threshold_c,
+                                    dim=2,
+                                    keepdim=False,
+                                ).to(noise_guidance_edit_tmp_quantile.dtype)
+
+                            self.activation_mask[i, c] = (
+                                torch.where(
+                                    noise_guidance_edit_tmp_quantile >= tmp[:, :, None, None],
+                                    torch.ones_like(noise_guidance_edit_tmp),
+                                    torch.zeros_like(noise_guidance_edit_tmp),
+                                )
+                                .detach()
+                                .cpu()
+                            )
+
+                            noise_guidance_edit_tmp = torch.where(
+                                noise_guidance_edit_tmp_quantile >= tmp[:, :, None, None],
+                                noise_guidance_edit_tmp,
+                                torch.zeros_like(noise_guidance_edit_tmp),
+                            )
+
+                        noise_guidance_edit += noise_guidance_edit_tmp
+
+                    self.sem_guidance[i] = noise_guidance_edit.detach().cpu()
+
+                noise_pred = noise_pred_uncond + noise_guidance_edit
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                if enable_edit_guidance and self.guidance_rescale > 0.0:
+                    # Based on 3.4. in https://arxiv.org/pdf/2305.08891.pdf
+                    noise_pred = rescale_noise_cfg(
+                        noise_pred,
+                        noise_pred_edit_concepts.mean(dim=0, keepdim=False),
+                        guidance_rescale=self.guidance_rescale,
+                    )
+
+                idx = t_to_idx[int(t)]
+                latents = self.scheduler.step(
+                    noise_pred, t, latents, variance_noise=zs[idx], **extra_step_kwargs, return_dict=False
+                )[0]
+
+                # step callback
+                if use_cross_attn_mask:
+                    store_step = i in attn_store_steps
+                    self.attention_store.between_steps(store_step)
+
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
