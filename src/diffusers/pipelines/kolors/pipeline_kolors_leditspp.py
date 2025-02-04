@@ -1184,7 +1184,6 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             negative_prompt=negative_prompt,
-            pooled_prompt_embeds=pooled_prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
             enable_edit_guidance=enable_edit_guidance,
