@@ -76,7 +76,7 @@ EXAMPLE_DOC_STRING = """
         >>> edited_image = pipe(
         ...     editing_prompt=["tomato"],
         ...     reverse_editing_direction=[False],
-        ...     edit_guidance_scale=[7],
+        ...     edit_guidance_scale=[7.5],
         ...     edit_threshold=[0.9],
         ... ).images[0]
 
@@ -1128,7 +1128,8 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
             raise ValueError(
                 "You need to invert an input image first before calling the pipeline. The `invert` method has to be called beforehand. Edits will always be performed for the last inverted image(s)."
             )
-
+        # Reset attn processor, we do not want to store attn maps during inversion
+        self.attention_store = []
         eta = self.eta
         num_images_per_prompt = 1
         latents = self.init_latents
