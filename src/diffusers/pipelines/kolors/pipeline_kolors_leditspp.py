@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
-
+import torch.nn.functional as F
 from ...callbacks import MultiPipelineCallbacks, PipelineCallback
 from ...image_processor import PipelineImageInput, VaeImageProcessor
 from ...loaders import IPAdapterMixin, StableDiffusionXLLoraLoaderMixin
