@@ -511,7 +511,7 @@ class KolorsLEditsPPPipeline(DiffusionPipeline, StableDiffusionMixin, StableDiff
                     return_tensors="pt",
                     return_length=True,
                 ).to(device)
-                num_edit_tokens = len(edit_concepts_input).length - 2
+                num_edit_tokens = edit_concepts_input.length - 2
                 edit_concepts_embeds = text_encoder(
                     input_ids=edit_concepts_input["input_ids"],
                     attention_mask=edit_concepts_input["attention_mask"],
