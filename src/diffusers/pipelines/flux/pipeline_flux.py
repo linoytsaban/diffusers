@@ -881,8 +881,11 @@ class FluxPipeline(
 
         # handle guidance
         if self.transformer.config.guidance_embeds:
-            guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
-            guidance = guidance.expand(latents.shape[0])
+            if isinstance(guidance_scale, list):
+                guidance = torch.tensor(guidance_scale, device=device, dtype=torch.float32)
+            else:
+                guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
+                guidance = guidance.expand(latents.shape[0])
         else:
             guidance = None
 
