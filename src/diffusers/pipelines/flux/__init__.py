@@ -24,6 +24,7 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["modeling_flux"] = ["ReduxImageEncoder"]
     _import_structure["pipeline_flux"] = ["FluxPipeline"]
+    _import_structure["pipeline_flux_semantic_flow"] = ["FluxSemanticFlowPipeline"]
     _import_structure["pipeline_flux_control"] = ["FluxControlPipeline"]
     _import_structure["pipeline_flux_control_img2img"] = ["FluxControlImg2ImgPipeline"]
     _import_structure["pipeline_flux_control_inpaint"] = ["FluxControlInpaintPipeline"]

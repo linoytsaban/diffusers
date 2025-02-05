@@ -127,6 +127,7 @@ else:
         "AnimateDiffVideoToVideoControlNetPipeline",
     ]
     _import_structure["flux"] = [
+        "FluxSemanticFlowPipeline",
         "FluxControlPipeline",
         "FluxControlInpaintPipeline",
         "FluxControlImg2ImgPipeline",
@@ -541,6 +542,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             VQDiffusionPipeline,
         )
         from .flux import (
+            FluxSemanticFlowPipeline,
             FluxControlImg2ImgPipeline,
             FluxControlInpaintPipeline,
             FluxControlNetImg2ImgPipeline,
