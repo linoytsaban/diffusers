@@ -882,6 +882,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         print(f"temb single loop", temb.shape)
         output = self.final_layer(hidden_states, temb)
         print(f"output 1", output.shape)
+        print("img_sizes", img_sizes)
         output = self.unpatchify(output, img_sizes, self.training)
 
         print(f"output", output.shape)
