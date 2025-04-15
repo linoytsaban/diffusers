@@ -663,28 +663,18 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
         if is_training:
-            B, S, F = x.shape
-            C = F // (self.config.patch_size * self.config.patch_size)
-            x = (
-                x.reshape(B, S, self.config.patch_size, self.config.patch_size, C)
-                .permute(0, 4, 1, 2, 3)
-                .reshape(B, C, S, self.config.patch_size * self.config.patch_size)
-            )
+            x = einops.rearrange(x, 'B S (p1 p2 C) -> B C S (p1 p2)', p1=self.config.patch_size,
+                                     p2=self.config.patch_size)
             print("x training", x.shape)
             print("self.config.patch_size", self.config.patch_size)
         else:
             x_arr = []
-            p1 = self.config.patch_size
-            p2 = self.config.patch_size
             for i, img_size in enumerate(img_sizes):
                 pH, pW = img_size
-                t = x[i, : pH * pW].reshape(1, pH, pW, -1)
-                F_token = t.shape[-1]
-                C = F_token // (p1 * p2)
-                t = t.reshape(1, pH, pW, p1, p2, C)
-                t = t.permute(0, 5, 1, 3, 2, 4)
-                t = t.reshape(1, C, pH * p1, pW * p2)
-                x_arr.append(t)
+                x_arr.append(
+                    einops.rearrange(x[i, :pH * pW].reshape(1, pH, pW, -1), 'B H W (p1 p2 C) -> B C (H p1) (W p2)',
+                                     p1=self.config.patch_size, p2=self.config.patch_size)
+                )
             x = torch.cat(x_arr, dim=0)
             print("x NOT training", x.shape)
             print("p1", self.config.patch_size)
