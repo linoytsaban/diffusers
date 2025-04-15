@@ -744,6 +744,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         # spatial forward
         batch_size = hidden_states.shape[0]
         hidden_states_type = hidden_states.dtype
+        print("hidden_states", hidden_states.shape)
 
         if hidden_states.shape[-2] != hidden_states.shape[-1]:
             B, C, H, W = hidden_states.shape
@@ -759,13 +760,15 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             hidden_states = hidden_states.reshape(B, C, pH * pW, patch_size * patch_size)
             out[:, :, 0 : pH * pW] = hidden_states
             hidden_states = out
-
+        print("hidden_states 2", hidden_states.shape)
         # 0. time
         timesteps = self.t_embedder(timesteps, hidden_states_type)
         p_embedder = self.p_embedder(pooled_embeds)
         temb = timesteps + p_embedder
+        print("temb 3", temb.shape)
 
         hidden_states, hidden_states_masks, img_sizes = self.patchify(hidden_states, self.max_seq, img_sizes)
+        print("patchify 4 hidden_states, img_sizes", hidden_states.shape, img_sizes)
         if hidden_states_masks is None:
             pH, pW = img_sizes[0]
             img_ids = torch.zeros(pH, pW, 3, device=hidden_states.device)
@@ -777,6 +780,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 .repeat(batch_size, 1, 1)
             )
         hidden_states = self.x_embedder(hidden_states)
+        print("hidden_states 5", hidden_states.shape)
 
         T5_encoder_hidden_states = encoder_hidden_states[0]
         encoder_hidden_states = encoder_hidden_states[-1]
@@ -804,10 +808,12 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
         ids = torch.cat((img_ids, txt_ids), dim=1)
         image_rotary_emb = self.pe_embedder(ids)
+        print("image_rotary_emb, ids 6", ids.shape, image_rotary_emb.shape)
 
         # 2. Blocks
         block_id = 0
         initial_encoder_hidden_states = torch.cat([encoder_hidden_states[-1], encoder_hidden_states[-2]], dim=1)
+        print("initial_encoder_hidden_states 7", initial_encoder_hidden_states.shape)
         initial_encoder_hidden_states_seq_len = initial_encoder_hidden_states.shape[1]
         for bid, block in enumerate(self.double_stream_blocks):
             cur_llama31_encoder_hidden_states = encoder_hidden_states[block_id]
@@ -831,6 +837,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
+                print(f"hidden_states initial_encoder_hidden_states {bid}", hidden_states.shape, initial_encoder_hidden_states.shape)
             initial_encoder_hidden_states = initial_encoder_hidden_states[:, :initial_encoder_hidden_states_seq_len]
             block_id += 1
 
