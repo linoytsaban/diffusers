@@ -562,6 +562,8 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         scale = math.sqrt(scale)
         width, height = int(width * scale // division * division), int(height * scale // division * division)
 
+        print("width, height #1" , width, height)
+
         self._guidance_scale = guidance_scale
         self._attention_kwargs = attention_kwargs
         self._interrupt = False
@@ -614,8 +616,13 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
             prompt_embeds = prompt_embeds_arr
             pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
 
+        print("prompt_embeds, pooled_prompt_embeds #2", len(prompt_embeds), pooled_prompt_embeds.shape)
+
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
+        print("num_channels_latents #3", num_channels_latents)
+        print("batch_size #4", batch_size)
+        print("height, width #5", height, width)
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
@@ -626,7 +633,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
             generator,
             latents,
         )
-
+        print("latents #6", latents.shape)
         if latents.shape[-2] != latents.shape[-1]:
             B, C, H, W = latents.shape
             pH, pW = H // self.transformer.config.patch_size, W // self.transformer.config.patch_size
@@ -644,6 +651,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
             if self.do_classifier_free_guidance:
                 img_sizes = img_sizes.repeat(2 * B, 1)
                 img_ids = img_ids.repeat(2 * B, 1, 1)
+            print("img_sizes img_ids #7", img_sizes.shape, img_ids.shape)
         else:
             img_sizes = img_ids = None
 
@@ -672,6 +680,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                print("latent_model_input #7", latent_model_input.shape)
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
@@ -684,6 +693,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
                     img_ids=img_ids,
                     return_dict=False,
                 )[0]
+                print("noise_pred #8", noise_pred.shape)
                 noise_pred = -noise_pred
 
                 # perform guidance
@@ -694,6 +704,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                print("latents #9", latents.shape)
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
