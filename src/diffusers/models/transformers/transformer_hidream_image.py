@@ -310,7 +310,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
 
         ### expert-level computation auxiliary loss
-        if self.training and self.alpha > 0.0:
+        if self.training and 0 and self.alpha > 0.0:
             scores_for_aux = scores
             aux_topk = self.top_k
             # always compute aux loss based on the naive greedy topk method
@@ -360,7 +360,7 @@ class MOEFeedForwardSwiGLU(nn.Module):
         topk_idx, topk_weight, aux_loss = self.gate(x)
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
-        if self.training:
+        if self.training and 0:
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
             for i, expert in enumerate(self.experts):
