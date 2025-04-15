@@ -843,6 +843,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         image_tokens_seq_len = hidden_states.shape[1]
         hidden_states = torch.cat([hidden_states, initial_encoder_hidden_states], dim=1)
+        print(f"hidden_states post double blocks", hidden_states.shape)
         hidden_states_seq_len = hidden_states.shape[1]
         if hidden_states_masks is not None:
             encoder_attention_mask_ones = torch.ones(
@@ -872,12 +873,16 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
+                print(f"hidden_states {bid}", hidden_states.shape)
             hidden_states = hidden_states[:, :hidden_states_seq_len]
             block_id += 1
 
         hidden_states = hidden_states[:, :image_tokens_seq_len, ...]
+        print(f"hidden_states post single loop", hidden_states.shape)
         output = self.final_layer(hidden_states, temb)
         output = self.unpatchify(output, img_sizes, self.training)
+
+        print(f"output", output.shape)
         if hidden_states_masks is not None:
             hidden_states_masks = hidden_states_masks[:, :image_tokens_seq_len]
 
