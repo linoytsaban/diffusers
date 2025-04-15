@@ -201,7 +201,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         dtype = dtype or self.text_encoder_3.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
-
+        print("WTF seq length t5", min(max_sequence_length, self.tokenizer_3.model_max_length))
         text_inputs = self.tokenizer_3(
             prompt,
             padding="max_length",
@@ -275,7 +275,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         dtype = dtype or self.text_encoder_4.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
-
+        print("WTF seq length llama", min(max_sequence_length, self.tokenizer_4.model_max_length))
         text_inputs = self.tokenizer_4(
             prompt,
             padding="max_length",
