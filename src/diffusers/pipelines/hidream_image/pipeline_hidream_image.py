@@ -623,6 +623,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
         print("num_channels_latents #3", num_channels_latents)
+        print("self.transformer.config.out_channels", self.transformer.config.out_channels)
         print("batch_size #4", batch_size)
         print("height, width #5", height, width)
         latents = self.prepare_latents(
