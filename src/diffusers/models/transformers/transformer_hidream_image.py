@@ -670,6 +670,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 .permute(0, 4, 1, 2, 3)
                 .reshape(B, C, S, self.config.patch_size * self.config.patch_size)
             )
+            print("x training", x.shape)
         else:
             x_arr = []
             p1 = self.config.patch_size
@@ -684,6 +685,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 t = t.reshape(1, C, pH * p1, pW * p2)
                 x_arr.append(t)
             x = torch.cat(x_arr, dim=0)
+            print("x NOT training", x.shape)
         return x
 
     def patchify(self, x, max_seq, img_sizes=None):
