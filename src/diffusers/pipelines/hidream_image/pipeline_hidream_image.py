@@ -683,7 +683,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
                 print("latent_model_input #7", latent_model_input.shape)
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
-
+                print("timestep.shape")
                 noise_pred = self.transformer(
                     hidden_states=latent_model_input,
                     timesteps=timestep,
