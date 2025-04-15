@@ -879,7 +879,9 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         hidden_states = hidden_states[:, :image_tokens_seq_len, ...]
         print(f"hidden_states post single loop", hidden_states.shape)
+        print(f"temb single loop", temb.shape)
         output = self.final_layer(hidden_states, temb)
+        print(f"output 1", output.shape)
         output = self.unpatchify(output, img_sizes, self.training)
 
         print(f"output", output.shape)
