@@ -201,7 +201,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         dtype = dtype or self.text_encoder_3.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
-        print("WTF seq length t5", min(max_sequence_length, self.tokenizer_3.model_max_length))
+
         text_inputs = self.tokenizer_3(
             prompt,
             padding="max_length",
@@ -275,7 +275,7 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         dtype = dtype or self.text_encoder_4.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
-        print("WTF seq length llama", min(max_sequence_length, self.tokenizer_4.model_max_length))
+
         text_inputs = self.tokenizer_4(
             prompt,
             padding="max_length",
@@ -552,15 +552,17 @@ class HiDreamImagePipeline(DiffusionPipeline, HiDreamImageLoraLoaderMixin):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 128,
+        force_reso=False,
     ):
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
-        division = self.vae_scale_factor * 2
-        S_max = (self.default_sample_size * self.vae_scale_factor) ** 2
-        scale = S_max / (width * height)
-        scale = math.sqrt(scale)
-        width, height = int(width * scale // division * division), int(height * scale // division * division)
+        if not force_reso:
+            division = self.vae_scale_factor * 2
+            S_max = (self.default_sample_size * self.vae_scale_factor) ** 2
+            scale = S_max / (width * height)
+            scale = math.sqrt(scale)
+            width, height = int(width * scale // division * division), int(height * scale // division * division)
 
         print("width, height #1" , width, height)
 
