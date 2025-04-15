@@ -187,7 +187,8 @@ def load_text_encoders(class_one, class_two, class_three):
        "meta-llama/Meta-Llama-3.1-8B-Instruct",
         output_hidden_states=True,
         output_attentions=True,
-        torch_dtype=torch.bfloat16,)
+        attn_implementation="flash_attention_2",
+        torch_dtype=torch.bfloat16, )
     return text_encoder_one, text_encoder_two, text_encoder_three, text_encoder_four
 
 def log_validation(
@@ -343,8 +344,8 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--max_sequence_length",
         type=int,
-        default=256,
-        help="Maximum sequence length to use with with the Gemma2 model",
+        default=128,
+        help="Maximum sequence length to use with t5 and llama encoders",
     )
 
     parser.add_argument(
@@ -1087,8 +1088,6 @@ def encode_prompt(
         attention_mask=attention_mask_list[1] if attention_mask_list else None,
     )
 
-    print("t5_prompt_embeds",t5_prompt_embeds.shape)
-    print("llama3_prompt_embeds",llama3_prompt_embeds.shape)
     prompt_embeds = [t5_prompt_embeds, llama3_prompt_embeds]
 
     return prompt_embeds, pooled_prompt_embeds
@@ -1675,6 +1674,13 @@ def main(args):
                 sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
                 noisy_model_input = (1.0 - sigmas) * noise + sigmas * model_input
                 # Predict the noise residual
+
+                print("noisy_model_input", noisy_model_input.shape)
+                print("prompt_embeds", prompt_embeds[0].shape, prompt_embeds[1].shape)
+                print("pooled_prompt_embeds", pooled_prompt_embeds.shape)
+                print("transformer.config.in_channels", transformer.config.in_channels)
+                print("transformer.config.out_channels", transformer.config.out_channels)
+
                 model_pred = transformer(
                     hidden_states=noisy_model_input,
                     encoder_hidden_states=prompt_embeds,
@@ -1684,7 +1690,7 @@ def main(args):
                     img_ids=img_ids,
                     return_dict=False,
                 )[0]
-
+                print("model_pred", model_pred.shape)
                 # these weighting schemes use a uniform timestep sampling
                 # and instead post-weight the loss
                 weighting = compute_loss_weighting_for_sd3(weighting_scheme=args.weighting_scheme, sigmas=sigmas)
@@ -1808,10 +1814,11 @@ def main(args):
         # Load previous pipeline
         tokenizer_4 = PreTrainedTokenizerFast.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct")
         text_encoder_4 = LlamaForCausalLM.from_pretrained(
-             "meta-llama/Meta-Llama-3.1-8B-Instruct",
-             output_hidden_states=True,
-             output_attentions=True,
-             torch_dtype=torch.bfloat16,
+            "meta-llama/Meta-Llama-3.1-8B-Instruct",
+            output_hidden_states=True,
+            output_attentions=True,
+            attn_implementation="flash_attention_2",
+            torch_dtype=torch.bfloat16,
         )
         pipeline = HiDreamImagePipeline.from_pretrained(
             args.pretrained_model_name_or_path,
