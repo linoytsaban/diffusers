@@ -690,7 +690,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 H=pH, W=pW,
                 p1=self.config.patch_size, p2=self.config.patch_size
             )
-            print("x training", x.shape)
+            #print("x training", x.shape)
         else:
             x_arr = []
             p1 = self.config.patch_size
@@ -705,7 +705,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 t = t.reshape(1, C, pH * p1, pW * p2)
                 x_arr.append(t)
             x = torch.cat(x_arr, dim=0)
-            print("x", x.shape)
+            #print("x", x.shape)
         return x
 
     def patchify(self, x, max_seq, img_sizes=None):
@@ -895,7 +895,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
-                print(f"hidden_states {bid}", hidden_states.shape)
+                #print(f"hidden_states {bid}", hidden_states.shape)
             hidden_states = hidden_states[:, :hidden_states_seq_len]
             block_id += 1
 
@@ -907,7 +907,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         # print("img_sizes", img_sizes)
         output = self.unpatchify(output, img_sizes, self.training)
 
-        print(f"output", output.shape)
+        #print(f"output", output.shape)
         if hidden_states_masks is not None:
             hidden_states_masks = hidden_states_masks[:, :image_tokens_seq_len]
 
