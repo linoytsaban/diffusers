@@ -3,13 +3,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import einops
-from einops import repeat
+
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import PeftAdapterMixin
 from ...models.modeling_outputs import Transformer2DModelOutput
 from ...models.modeling_utils import ModelMixin
-from ...utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
+from ...utils import USE_PEFT_BACKEND, deprecate, logging, scale_lora_layers, unscale_lora_layers
 from ...utils.torch_utils import maybe_allow_in_graph
 from ..attention import Attention
 from ..embeddings import TimestepEmbedding, Timesteps
@@ -310,7 +309,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
 
         ### expert-level computation auxiliary loss
-        if self.training and 0 and self.alpha > 0.0:
+        if self.training and self.alpha > 0.0:
             scores_for_aux = scores
             aux_topk = self.top_k
             # always compute aux loss based on the naive greedy topk method
@@ -360,7 +359,7 @@ class MOEFeedForwardSwiGLU(nn.Module):
         topk_idx, topk_weight, aux_loss = self.gate(x)
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
-        if self.training and 0:
+        if self.training:
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
             for i, expert in enumerate(self.experts):
@@ -663,34 +662,14 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.gradient_checkpointing = False
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
-        if is_training and 0:
-            # Assuming img_sizes contains [[pH, pW]] for each item in the batch.
-            # For simplicity in training, often all batches have the same size.
-            # We'll assume img_sizes[0] gives the target patch dimensions.
-            # If training with variable sizes, this needs more careful handling per item.
-            pH, pW = img_sizes[0]  # Get target patch height/width
-            expected_S = pH * pW
-            # Ensure sequence length S matches expected H*W before rearranging
-            # This might require padding/truncating x if training uses fixed max_seq
-            current_S = x.shape[1]
-            if current_S > expected_S:
-                x = x[:, :expected_S, :]  # Use only the relevant part of the sequence
-            elif current_S < expected_S:
-                # This case is less likely if padding happens earlier, but handle defensively
-                raise ValueError(
-                    f"Sequence length {current_S} is less than expected {expected_S} ({pH}x{pW}) during unpatchify.")
-
-            # Original incorrect line:
-            # x = einops.rearrange(x, 'B S (p1 p2 C) -> B C S (p1 p2)', p1=self.config.patch_size, p2=self.config.patch_size)
-
-            # Corrected line using einops and H, W:
-            x = einops.rearrange(
-                x,
-                'B (H W) (p1 p2 C) -> B C (H p1) (W p2)',
-                H=pH, W=pW,
-                p1=self.config.patch_size, p2=self.config.patch_size
+        if is_training:
+            B, S, F = x.shape
+            C = F // (self.config.patch_size * self.config.patch_size)
+            x = (
+                x.reshape(B, S, self.config.patch_size, self.config.patch_size, C)
+                .permute(0, 4, 1, 2, 3)
+                .reshape(B, C, S, self.config.patch_size * self.config.patch_size)
             )
-            #print("x training", x.shape)
         else:
             x_arr = []
             p1 = self.config.patch_size
@@ -705,49 +684,110 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 t = t.reshape(1, C, pH * p1, pW * p2)
                 x_arr.append(t)
             x = torch.cat(x_arr, dim=0)
-            #print("x", x.shape)
         return x
 
-    def patchify(self, x, max_seq, img_sizes=None):
-        pz2 = self.config.patch_size * self.config.patch_size
-        if isinstance(x, torch.Tensor):
-            B, C = x.shape[0], x.shape[1]
-            device = x.device
-            dtype = x.dtype
-        else:
-            B, C = len(x), x[0].shape[0]
-            device = x[0].device
-            dtype = x[0].dtype
-        x_masks = torch.zeros((B, max_seq), dtype=dtype, device=device)
+    def patchify(self, hidden_states):
+        batch_size, channels, height, width = hidden_states.shape
+        patch_size = self.config.patch_size
+        patch_height, patch_width = height // patch_size, width // patch_size
+        device = hidden_states.device
+        dtype = hidden_states.dtype
 
-        if img_sizes is not None:
-            for i, img_size in enumerate(img_sizes):
-                x_masks[i, 0 : img_size[0] * img_size[1]] = 1
-            B, C, S, _ = x.shape
-            x = x.permute(0, 2, 3, 1).reshape(B, S, pz2 * C)
-        elif isinstance(x, torch.Tensor):
-            B, C, Hp1, Wp2 = x.shape
-            pH, pW = Hp1 // self.config.patch_size, Wp2 // self.config.patch_size
-            x = x.reshape(B, C, pH, self.config.patch_size, pW, self.config.patch_size)
-            x = x.permute(0, 2, 4, 3, 5, 1)
-            x = x.reshape(B, pH * pW, self.config.patch_size * self.config.patch_size * C)
-            img_sizes = [[pH, pW]] * B
-            x_masks = None
+        # create img_sizes
+        img_sizes = torch.tensor([patch_height, patch_width], dtype=torch.int64, device=device).reshape(-1)
+        img_sizes = img_sizes.unsqueeze(0).repeat(batch_size, 1)
+
+        # create hidden_states_masks
+        if hidden_states.shape[-2] != hidden_states.shape[-1]:
+            hidden_states_masks = torch.zeros((batch_size, self.max_seq), dtype=dtype, device=device)
+            hidden_states_masks[:, : patch_height * patch_width] = 1.0
         else:
-            raise NotImplementedError
-        return x, x_masks, img_sizes
+            hidden_states_masks = None
+
+        # create img_ids
+        img_ids = torch.zeros(patch_height, patch_width, 3, device=device)
+        row_indices = torch.arange(patch_height, device=device)[:, None]
+        col_indices = torch.arange(patch_width, device=device)[None, :]
+        img_ids[..., 1] = img_ids[..., 1] + row_indices
+        img_ids[..., 2] = img_ids[..., 2] + col_indices
+        img_ids = img_ids.reshape(patch_height * patch_width, -1)
+
+        if hidden_states.shape[-2] != hidden_states.shape[-1]:
+            # Handle non-square latents
+            img_ids_pad = torch.zeros(self.max_seq, 3, device=device)
+            img_ids_pad[: patch_height * patch_width, :] = img_ids
+            img_ids = img_ids_pad.unsqueeze(0).repeat(batch_size, 1, 1)
+        else:
+            img_ids = img_ids.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        # patchify hidden_states
+        if hidden_states.shape[-2] != hidden_states.shape[-1]:
+            # Handle non-square latents
+            out = torch.zeros(
+                (batch_size, channels, self.max_seq, patch_size * patch_size),
+                dtype=dtype,
+                device=device,
+            )
+            hidden_states = hidden_states.reshape(
+                batch_size, channels, patch_height, patch_size, patch_width, patch_size
+            )
+            hidden_states = hidden_states.permute(0, 1, 2, 4, 3, 5)
+            hidden_states = hidden_states.reshape(
+                batch_size, channels, patch_height * patch_width, patch_size * patch_size
+            )
+            out[:, :, 0 : patch_height * patch_width] = hidden_states
+            hidden_states = out
+            hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(
+                batch_size, self.max_seq, patch_size * patch_size * channels
+            )
+
+        else:
+            # Handle square latents
+            hidden_states = hidden_states.reshape(
+                batch_size, channels, patch_height, patch_size, patch_width, patch_size
+            )
+            hidden_states = hidden_states.permute(0, 2, 4, 3, 5, 1)
+            hidden_states = hidden_states.reshape(
+                batch_size, patch_height * patch_width, patch_size * patch_size * channels
+            )
+
+        return hidden_states, hidden_states_masks, img_sizes, img_ids
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         timesteps: torch.LongTensor = None,
-        encoder_hidden_states: torch.Tensor = None,
+        encoder_hidden_states_t5: torch.Tensor = None,
+        encoder_hidden_states_llama3: torch.Tensor = None,
         pooled_embeds: torch.Tensor = None,
-        img_sizes: Optional[List[Tuple[int, int]]] = None,
         img_ids: Optional[torch.Tensor] = None,
+        img_sizes: Optional[List[Tuple[int, int]]] = None,
+        hidden_states_masks: Optional[torch.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
+        **kwargs,
     ):
+        encoder_hidden_states = kwargs.get("encoder_hidden_states", None)
+
+        if encoder_hidden_states is not None:
+            deprecation_message = "The `encoder_hidden_states` argument is deprecated. Please use `encoder_hidden_states_t5` and `encoder_hidden_states_llama3` instead."
+            deprecate("encoder_hidden_states", "0.34.0", deprecation_message)
+            encoder_hidden_states_t5 = encoder_hidden_states[0]
+            encoder_hidden_states_llama3 = encoder_hidden_states[1]
+
+        if img_ids is not None and img_sizes is not None and hidden_states_masks is None:
+            deprecation_message = (
+                "Passing `img_ids` and `img_sizes` with unpachified `hidden_states` is deprecated and will be ignored."
+            )
+            deprecate("img_ids", "0.34.0", deprecation_message)
+
+        if hidden_states_masks is not None and (img_ids is None or img_sizes is None):
+            raise ValueError("if `hidden_states_masks` is passed, `img_ids` and `img_sizes` must also be passed.")
+        elif hidden_states_masks is not None and hidden_states.ndim != 3:
+            raise ValueError(
+                "if `hidden_states_masks` is passed, `hidden_states` must be a 3D tensors with shape (batch_size, patch_height * patch_width, patch_size * patch_size * channels)"
+            )
+
         if attention_kwargs is not None:
             attention_kwargs = attention_kwargs.copy()
             lora_scale = attention_kwargs.pop("scale", 1.0)
@@ -766,47 +806,20 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         # spatial forward
         batch_size = hidden_states.shape[0]
         hidden_states_type = hidden_states.dtype
-        # print("hidden_states", hidden_states.shape)
 
-        if hidden_states.shape[-2] != hidden_states.shape[-1]:
-            B, C, H, W = hidden_states.shape
-            patch_size = self.config.patch_size
-            pH, pW = H // patch_size, W // patch_size
-            out = torch.zeros(
-                (B, C, self.max_seq, patch_size * patch_size),
-                dtype=hidden_states.dtype,
-                device=hidden_states.device,
-            )
-            hidden_states = hidden_states.reshape(B, C, pH, patch_size, pW, patch_size)
-            hidden_states = hidden_states.permute(0, 1, 2, 4, 3, 5)
-            hidden_states = hidden_states.reshape(B, C, pH * pW, patch_size * patch_size)
-            out[:, :, 0 : pH * pW] = hidden_states
-            hidden_states = out
-        # print("hidden_states 2", hidden_states.shape)
+        # Patchify the input
+        if hidden_states_masks is None:
+            hidden_states, hidden_states_masks, img_sizes, img_ids = self.patchify(hidden_states)
+
+        # Embed the hidden states
+        hidden_states = self.x_embedder(hidden_states)
+
         # 0. time
         timesteps = self.t_embedder(timesteps, hidden_states_type)
         p_embedder = self.p_embedder(pooled_embeds)
         temb = timesteps + p_embedder
-        # print("temb 3", temb.shape)
 
-        hidden_states, hidden_states_masks, img_sizes = self.patchify(hidden_states, self.max_seq, img_sizes)
-        # print("patchify 4 hidden_states, img_sizes", hidden_states.shape, img_sizes)
-        if hidden_states_masks is None:
-            pH, pW = img_sizes[0]
-            img_ids = torch.zeros(pH, pW, 3, device=hidden_states.device)
-            img_ids[..., 1] = img_ids[..., 1] + torch.arange(pH, device=hidden_states.device)[:, None]
-            img_ids[..., 2] = img_ids[..., 2] + torch.arange(pW, device=hidden_states.device)[None, :]
-            img_ids = (
-                img_ids.reshape(img_ids.shape[0] * img_ids.shape[1], img_ids.shape[2])
-                .unsqueeze(0)
-                .repeat(batch_size, 1, 1)
-            )
-        hidden_states = self.x_embedder(hidden_states)
-        # print("hidden_states 5", hidden_states.shape)
-
-        T5_encoder_hidden_states = encoder_hidden_states[0]
-        encoder_hidden_states = encoder_hidden_states[-1]
-        encoder_hidden_states = [encoder_hidden_states[k] for k in self.config.llama_layers]
+        encoder_hidden_states = [encoder_hidden_states_llama3[k] for k in self.config.llama_layers]
 
         if self.caption_projection is not None:
             new_encoder_hidden_states = []
@@ -815,9 +828,9 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 enc_hidden_state = enc_hidden_state.view(batch_size, -1, hidden_states.shape[-1])
                 new_encoder_hidden_states.append(enc_hidden_state)
             encoder_hidden_states = new_encoder_hidden_states
-            T5_encoder_hidden_states = self.caption_projection[-1](T5_encoder_hidden_states)
-            T5_encoder_hidden_states = T5_encoder_hidden_states.view(batch_size, -1, hidden_states.shape[-1])
-            encoder_hidden_states.append(T5_encoder_hidden_states)
+            encoder_hidden_states_t5 = self.caption_projection[-1](encoder_hidden_states_t5)
+            encoder_hidden_states_t5 = encoder_hidden_states_t5.view(batch_size, -1, hidden_states.shape[-1])
+            encoder_hidden_states.append(encoder_hidden_states_t5)
 
         txt_ids = torch.zeros(
             batch_size,
@@ -830,12 +843,10 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
         ids = torch.cat((img_ids, txt_ids), dim=1)
         image_rotary_emb = self.pe_embedder(ids)
-        # print("image_rotary_emb, ids 6", ids.shape, image_rotary_emb.shape)
 
         # 2. Blocks
         block_id = 0
         initial_encoder_hidden_states = torch.cat([encoder_hidden_states[-1], encoder_hidden_states[-2]], dim=1)
-        #print("initial_encoder_hidden_states 7", initial_encoder_hidden_states.shape)
         initial_encoder_hidden_states_seq_len = initial_encoder_hidden_states.shape[1]
         for bid, block in enumerate(self.double_stream_blocks):
             cur_llama31_encoder_hidden_states = encoder_hidden_states[block_id]
@@ -859,13 +870,11 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
-                #print(f"hidden_states initial_encoder_hidden_states {bid}", hidden_states.shape, initial_encoder_hidden_states.shape)
             initial_encoder_hidden_states = initial_encoder_hidden_states[:, :initial_encoder_hidden_states_seq_len]
             block_id += 1
 
         image_tokens_seq_len = hidden_states.shape[1]
         hidden_states = torch.cat([hidden_states, initial_encoder_hidden_states], dim=1)
-        #print(f"hidden_states post double blocks", hidden_states.shape)
         hidden_states_seq_len = hidden_states.shape[1]
         if hidden_states_masks is not None:
             encoder_attention_mask_ones = torch.ones(
@@ -895,19 +904,12 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
-                #print(f"hidden_states {bid}", hidden_states.shape)
             hidden_states = hidden_states[:, :hidden_states_seq_len]
             block_id += 1
 
         hidden_states = hidden_states[:, :image_tokens_seq_len, ...]
-        # print(f"hidden_states post single loop", hidden_states.shape)
-        # print(f"temb single loop", temb.shape)
         output = self.final_layer(hidden_states, temb)
-        # print(f"output 1", output.shape)
-        # print("img_sizes", img_sizes)
         output = self.unpatchify(output, img_sizes, self.training)
-
-        #print(f"output", output.shape)
         if hidden_states_masks is not None:
             hidden_states_masks = hidden_states_masks[:, :image_tokens_seq_len]
 
