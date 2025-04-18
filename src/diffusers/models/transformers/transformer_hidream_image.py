@@ -310,7 +310,6 @@ class MoEGate(nn.Module):
 
         ### expert-level computation auxiliary loss
         if self.training and self.alpha > 0.0 and not self.config._force_inference_output:
-            print("wat 1")
             scores_for_aux = scores
             aux_topk = self.top_k
             # always compute aux loss based on the naive greedy topk method
@@ -361,7 +360,6 @@ class MOEFeedForwardSwiGLU(nn.Module):
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
         if self.training and not self.config._force_inference_output:
-            print("wat 1")
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
             for i, expert in enumerate(self.experts):
@@ -666,7 +664,6 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
         if is_training and not self.config._force_inference_output:
-            print("wat 1")
             B, S, F = x.shape
             C = F // (self.config.patch_size * self.config.patch_size)
             x = (
