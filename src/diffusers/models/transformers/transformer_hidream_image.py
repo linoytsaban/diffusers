@@ -277,6 +277,7 @@ class HiDreamAttnProcessor:
 class MoEGate(nn.Module):
     def __init__(self, embed_dim, num_routed_experts=4, num_activated_experts=2, aux_loss_alpha=0.01):
         super().__init__()
+        self.config = config # Store config to enable/disable aux loss computation
         self.top_k = num_activated_experts
         self.n_routed_experts = num_routed_experts
 
@@ -337,17 +338,20 @@ class MoEGate(nn.Module):
 class MOEFeedForwardSwiGLU(nn.Module):
     def __init__(
         self,
+        config,
         dim: int,
         hidden_dim: int,
         num_routed_experts: int,
         num_activated_experts: int,
     ):
         super().__init__()
+        self.config = config # Store config (needed for forward)
         self.shared_experts = HiDreamImageFeedForwardSwiGLU(dim, hidden_dim // 2)
         self.experts = nn.ModuleList(
             [HiDreamImageFeedForwardSwiGLU(dim, hidden_dim) for i in range(num_routed_experts)]
         )
         self.gate = MoEGate(
+            config=config, # Pass config
             embed_dim=dim, num_routed_experts=num_routed_experts, num_activated_experts=num_activated_experts
         )
         self.num_activated_experts = num_activated_experts
@@ -408,6 +412,7 @@ class TextProjection(nn.Module):
 class HiDreamImageSingleTransformerBlock(nn.Module):
     def __init__(
         self,
+        config,
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
@@ -432,13 +437,14 @@ class HiDreamImageSingleTransformerBlock(nn.Module):
         self.norm3_i = nn.LayerNorm(dim, eps=1e-06, elementwise_affine=False)
         if num_routed_experts > 0:
             self.ff_i = MOEFeedForwardSwiGLU(
+                config=config,
                 dim=dim,
                 hidden_dim=4 * dim,
                 num_routed_experts=num_routed_experts,
                 num_activated_experts=num_activated_experts,
             )
         else:
-            self.ff_i = HiDreamImageFeedForwardSwiGLU(dim=dim, hidden_dim=4 * dim)
+            self.ff_i = HiDreamImageFeedForwardSwiGLU(dim=dim, hidden_dim=4 * dim) # Non-MoE FF doesn't need config
 
     def forward(
         self,
@@ -475,6 +481,7 @@ class HiDreamImageSingleTransformerBlock(nn.Module):
 class HiDreamImageTransformerBlock(nn.Module):
     def __init__(
         self,
+        config,
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
@@ -500,6 +507,7 @@ class HiDreamImageTransformerBlock(nn.Module):
         self.norm3_i = nn.LayerNorm(dim, eps=1e-06, elementwise_affine=False)
         if num_routed_experts > 0:
             self.ff_i = MOEFeedForwardSwiGLU(
+                config=config,
                 dim=dim,
                 hidden_dim=4 * dim,
                 num_routed_experts=num_routed_experts,
