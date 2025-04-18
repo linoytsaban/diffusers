@@ -275,7 +275,7 @@ class HiDreamAttnProcessor:
 
 # Modified from https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py
 class MoEGate(nn.Module):
-    def __init__(self, embed_dim, num_routed_experts=4, num_activated_experts=2, aux_loss_alpha=0.01):
+    def __init__(self, config, embed_dim, num_routed_experts=4, num_activated_experts=2, aux_loss_alpha=0.01):
         super().__init__()
         self.config = config # Store config to enable/disable aux loss computation
         self.top_k = num_activated_experts
