@@ -575,7 +575,6 @@ class HiDreamBlock(nn.Module):
         encoder_hidden_states: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
         image_rotary_emb: torch.Tensor = None,
-        _force_inference_output: bool = False,
     ) -> torch.Tensor:
         return self.block(
             hidden_states=hidden_states,
@@ -607,6 +606,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         axes_dims_rope: Tuple[int, int] = (32, 32),
         max_resolution: Tuple[int, int] = (128, 128),
         llama_layers: List[int] = None,
+        _force_inference_output: bool = False
     ):
         super().__init__()
         self.out_channels = out_channels or in_channels
