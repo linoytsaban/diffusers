@@ -619,7 +619,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         super().__init__()
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
-
+        self._force_inference_output=_force_inference_output
         self.t_embedder = HiDreamImageTimestepEmbed(self.inner_dim)
         self.p_embedder = HiDreamImagePooledEmbed(text_emb_dim, self.inner_dim)
         self.x_embedder = HiDreamImagePatchEmbed(
