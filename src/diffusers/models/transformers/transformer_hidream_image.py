@@ -619,7 +619,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         axes_dims_rope: Tuple[int, int] = (32, 32),
         max_resolution: Tuple[int, int] = (128, 128),
         llama_layers: List[int] = None,
-        _force_inference_output: bool = False
+        force_inference_output: bool = False
     ):
         super().__init__()
         self.out_channels = out_channels or in_channels
@@ -642,7 +642,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                         attention_head_dim=attention_head_dim,
                         num_routed_experts=num_routed_experts,
                         num_activated_experts=num_activated_experts,
-                        _force_inference_output=_force_inference_output
+                        _force_inference_output=force_inference_output
                     )
                 )
                 for _ in range(num_layers)
@@ -658,7 +658,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                         attention_head_dim=attention_head_dim,
                         num_routed_experts=num_routed_experts,
                         num_activated_experts=num_activated_experts,
-                        _force_inference_output=_force_inference_output
+                        _force_inference_output=force_inference_output
                     )
                 )
                 for _ in range(num_single_layers)
@@ -677,8 +677,8 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.gradient_checkpointing = False
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
-        print("unpatchify: self.config._force_inference_output", self.config._force_inference_output)
-        if is_training and not self.config._force_inference_output:
+        print("unpatchify: self.config._force_inference_output", self.config.force_inference_output)
+        if is_training and not self.config.force_inference_output:
             B, S, F = x.shape
             C = F // (self.config.patch_size * self.config.patch_size)
             x = (
