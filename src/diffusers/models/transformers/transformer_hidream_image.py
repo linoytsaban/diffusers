@@ -275,9 +275,8 @@ class HiDreamAttnProcessor:
 
 # Modified from https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py
 class MoEGate(nn.Module):
-    def __init__(self, config, embed_dim, num_routed_experts=4, num_activated_experts=2, aux_loss_alpha=0.01):
+    def __init__(self, config, embed_dim, num_routed_experts=4, num_activated_experts=2, aux_loss_alpha=0.01, _force_inference_output=False):
         super().__init__()
-        self.config = config # Store config to enable/disable aux loss computation
         self.top_k = num_activated_experts
         self.n_routed_experts = num_routed_experts
 
@@ -289,6 +288,9 @@ class MoEGate(nn.Module):
         self.norm_topk_prob = False
         self.gating_dim = embed_dim
         self.weight = nn.Parameter(torch.randn(self.n_routed_experts, self.gating_dim) / embed_dim**0.5)
+
+        self._force_inference_output = _force_inference_output
+
 
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
@@ -310,8 +312,8 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
 
         ### expert-level computation auxiliary loss
-        print("forward 1: self.config._force_inference_output", self.config._force_inference_output)
-        if self.training and self.alpha > 0.0 and not self.config._force_inference_output:
+        print("forward 1: self._force_inference_output", self._force_inference_output)
+        if self.training and self.alpha > 0.0 and not self._force_inference_output:
             scores_for_aux = scores
             aux_topk = self.top_k
             # always compute aux loss based on the naive greedy topk method
@@ -339,11 +341,11 @@ class MoEGate(nn.Module):
 class MOEFeedForwardSwiGLU(nn.Module):
     def __init__(
         self,
-        config,
         dim: int,
         hidden_dim: int,
         num_routed_experts: int,
         num_activated_experts: int,
+        _force_inference_output: bool = False,
     ):
         super().__init__()
         self.config = config # Store config (needed for forward)
@@ -356,6 +358,7 @@ class MOEFeedForwardSwiGLU(nn.Module):
             embed_dim=dim, num_routed_experts=num_routed_experts, num_activated_experts=num_activated_experts
         )
         self.num_activated_experts = num_activated_experts
+        self._force_inference_output = _force_inference_output
 
     def forward(self, x):
         wtype = x.dtype
@@ -364,8 +367,8 @@ class MOEFeedForwardSwiGLU(nn.Module):
         topk_idx, topk_weight, aux_loss = self.gate(x)
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
-        print("forward 2: self.config._force_inference_output", self.config._force_inference_output)
-        if self.training and not self.config._force_inference_output:
+        print("forward 2: self.config._force_inference_output", self._force_inference_output)
+        if self.training and not self._force_inference_output:
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
             for i, expert in enumerate(self.experts):
@@ -634,12 +637,12 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             [
                 HiDreamBlock(
                     HiDreamImageTransformerBlock(
-                        config=self.config,
                         dim=self.inner_dim,
                         num_attention_heads=num_attention_heads,
                         attention_head_dim=attention_head_dim,
                         num_routed_experts=num_routed_experts,
                         num_activated_experts=num_activated_experts,
+                        _force_inference_output=_force_inference_output
                     )
                 )
                 for _ in range(num_layers)
@@ -650,12 +653,12 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             [
                 HiDreamBlock(
                     HiDreamImageSingleTransformerBlock(
-                        config=self.config,
                         dim=self.inner_dim,
                         num_attention_heads=num_attention_heads,
                         attention_head_dim=attention_head_dim,
                         num_routed_experts=num_routed_experts,
                         num_activated_experts=num_activated_experts,
+                        _force_inference_output=_force_inference_output
                     )
                 )
                 for _ in range(num_single_layers)
