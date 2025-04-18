@@ -633,6 +633,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             [
                 HiDreamBlock(
                     HiDreamImageTransformerBlock(
+                        config=self.config,
                         dim=self.inner_dim,
                         num_attention_heads=num_attention_heads,
                         attention_head_dim=attention_head_dim,
