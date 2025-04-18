@@ -619,7 +619,9 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         super().__init__()
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
+        print("_force_inference_output", _force_inference_output)
         self._force_inference_output=_force_inference_output
+        print("self._force_inference_output", self._force_inference_output)
         self.t_embedder = HiDreamImageTimestepEmbed(self.inner_dim)
         self.p_embedder = HiDreamImagePooledEmbed(text_emb_dim, self.inner_dim)
         self.x_embedder = HiDreamImagePatchEmbed(
@@ -673,7 +675,9 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.gradient_checkpointing = False
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
-        if is_training and not self.config._force_inference_output:
+        print("self._force_inference_output", self._force_inference_output)
+        print("self.config._force_inference_output", self.config._force_inference_output)
+        if is_training and not self._force_inference_output:
             B, S, F = x.shape
             C = F // (self.config.patch_size * self.config.patch_size)
             x = (
