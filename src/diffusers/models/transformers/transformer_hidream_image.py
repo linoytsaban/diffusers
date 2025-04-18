@@ -310,6 +310,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
 
         ### expert-level computation auxiliary loss
+        print("forward 1: self.config._force_inference_output", self.config._force_inference_output)
         if self.training and self.alpha > 0.0 and not self.config._force_inference_output:
             scores_for_aux = scores
             aux_topk = self.top_k
@@ -363,6 +364,7 @@ class MOEFeedForwardSwiGLU(nn.Module):
         topk_idx, topk_weight, aux_loss = self.gate(x)
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
+        print("forward 2: self.config._force_inference_output", self.config._force_inference_output)
         if self.training and not self.config._force_inference_output:
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
@@ -619,9 +621,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         super().__init__()
         self.out_channels = out_channels or in_channels
         self.inner_dim = num_attention_heads * attention_head_dim
-        print("_force_inference_output", _force_inference_output)
         self._force_inference_output=_force_inference_output
-        print("self._force_inference_output", self._force_inference_output)
         self.t_embedder = HiDreamImageTimestepEmbed(self.inner_dim)
         self.p_embedder = HiDreamImagePooledEmbed(text_emb_dim, self.inner_dim)
         self.x_embedder = HiDreamImagePatchEmbed(
@@ -675,8 +675,8 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.gradient_checkpointing = False
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
-        print("self._force_inference_output", self._force_inference_output)
-        print("self.config._force_inference_output", self.config._force_inference_output)
+        print("unpatchify: self._force_inference_output", self._force_inference_output)
+        print("unpatchify: self.config._force_inference_output", self.config._force_inference_output)
         if is_training and not self._force_inference_output:
             B, S, F = x.shape
             C = F // (self.config.patch_size * self.config.patch_size)
