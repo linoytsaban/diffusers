@@ -309,7 +309,7 @@ class MoEGate(nn.Module):
             topk_weight = topk_weight / denominator
 
         ### expert-level computation auxiliary loss
-        if self.training and self.alpha > 0.0 and False:
+        if self.training and self.alpha > 0.0 and not self.config._force_inference_output:
             print("wat 1")
             scores_for_aux = scores
             aux_topk = self.top_k
@@ -360,7 +360,7 @@ class MOEFeedForwardSwiGLU(nn.Module):
         topk_idx, topk_weight, aux_loss = self.gate(x)
         x = x.view(-1, x.shape[-1])
         flat_topk_idx = topk_idx.view(-1)
-        if self.training and False:
+        if self.training and not self.config._force_inference_output:
             print("wat 1")
             x = x.repeat_interleave(self.num_activated_experts, dim=0)
             y = torch.empty_like(x, dtype=wtype)
@@ -577,6 +577,7 @@ class HiDreamBlock(nn.Module):
         encoder_hidden_states: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
         image_rotary_emb: torch.Tensor = None,
+        _force_inference_output: bool = False,
     ) -> torch.Tensor:
         return self.block(
             hidden_states=hidden_states,
@@ -664,7 +665,7 @@ class HiDreamImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.gradient_checkpointing = False
 
     def unpatchify(self, x: torch.Tensor, img_sizes: List[Tuple[int, int]], is_training: bool) -> List[torch.Tensor]:
-        if is_training and False:
+        if is_training and not self.config._force_inference_output:
             print("wat 1")
             B, S, F = x.shape
             C = F // (self.config.patch_size * self.config.patch_size)
