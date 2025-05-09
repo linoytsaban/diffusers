@@ -806,6 +806,8 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
         num_channels_latents = self.transformer.config.in_channels
         window_num_frames = (latent_window_size - 1) * self.vae_scale_factor_temporal + 1
         num_latent_sections = max(1, (num_frames + window_num_frames - 1) // window_num_frames)
+
+        one_frame_inference = "default"
         # Specific to the released checkpoint: https://huggingface.co/lllyasviel/FramePackI2V_HY
         # TODO: find a more generic way in future if there are more checkpoints
         history_sizes = [1, 2, 16]
@@ -830,7 +832,7 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
             )
 
         latent_paddings = list(reversed(range(num_latent_sections)))
-        if num_latent_sections > 4:
+        if num_latent_sections > 4 and one_frame_inference is None:
             latent_paddings = [3] + [2] * (num_latent_sections - 3) + [1, 0]
 
         # 6. Prepare guidance condition
@@ -851,6 +853,9 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
                 indices_latents_history_2x,
                 indices_latents_history_4x,
             ) = indices.split([1, latent_padding_size, latent_window_size, *history_sizes], dim=0)
+
+            indices_latents = indices_latents[:, -1:]  # only use the last frame
+
             # Inverted anti-drifting sampling: Figure 2(c) in the paper
             indices_clean_latents = torch.cat([indices_prefix, indices_postfix], dim=0)
 
@@ -967,6 +972,9 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
                 history_latents = torch.cat([latents, history_latents], dim=2)
 
                 real_history_latents = history_latents[:, :, :total_generated_latent_frames]
+
+                if one_frame_inference is not None:
+                    real_history_latents = real_history_latents[:, :, 1:, :, :]  # remove the first frame
 
                 if history_video is None:
                     if not output_type == "latent":
