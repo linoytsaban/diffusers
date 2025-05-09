@@ -854,7 +854,7 @@ class HunyuanVideoFramepackPipeline(DiffusionPipeline, HunyuanVideoLoraLoaderMix
                 indices_latents_history_4x,
             ) = indices.split([1, latent_padding_size, latent_window_size, *history_sizes], dim=0)
 
-            indices_latents = indices_latents[:, -1:]  # only use the last frame
+            indices_latents = indices_latents[:, -1]  # only use the last frame
 
             # Inverted anti-drifting sampling: Figure 2(c) in the paper
             indices_clean_latents = torch.cat([indices_prefix, indices_postfix], dim=0)
