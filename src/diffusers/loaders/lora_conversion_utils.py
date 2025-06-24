@@ -1605,6 +1605,8 @@ def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
     lora_up_key = "lora_B" if any("lora_B" in k for k in original_state_dict) else "lora_up"
 
     diff_keys = [k for k in original_state_dict if k.endswith((".diff_b", ".diff"))]
+    proj_out_keys = [k for k in original_state_dict if k.endswith(".proj_out")]
+    print(" NOTICE proj_out_keys: ", proj_out_keys)
     if diff_keys:
         for diff_k in diff_keys:
             param = original_state_dict[diff_k]
