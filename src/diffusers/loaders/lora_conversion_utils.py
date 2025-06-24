@@ -1595,6 +1595,8 @@ def _convert_non_diffusers_lumina2_lora_to_diffusers(state_dict):
 def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
     converted_state_dict = {}
     original_state_dict = {k[len("diffusion_model.") :]: v for k, v in state_dict.items()}
+    proj_out_keys = [k for k in original_state_dict if ".proj_out" in k]
+    print(" NOTICE proj_out_keys: ", proj_out_keys)
 
     block_numbers = {int(k.split(".")[1]) for k in original_state_dict if k.startswith("blocks.")}
     min_block = min(block_numbers)
@@ -1605,8 +1607,7 @@ def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
     lora_up_key = "lora_B" if any("lora_B" in k for k in original_state_dict) else "lora_up"
 
     diff_keys = [k for k in original_state_dict if k.endswith((".diff_b", ".diff"))]
-    proj_out_keys = [k for k in original_state_dict if k.endswith(".proj_out")]
-    print(" NOTICE proj_out_keys: ", proj_out_keys)
+
     if diff_keys:
         for diff_k in diff_keys:
             param = original_state_dict[diff_k]
