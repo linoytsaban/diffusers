@@ -5143,6 +5143,7 @@ class WanLoraLoaderMixin(LoraBaseMixin):
             allow_pickle=allow_pickle,
         )
         if any(k.startswith("diffusion_model.") for k in state_dict):
+            print("YES! 1")
             state_dict = _convert_non_diffusers_wan_lora_to_diffusers(state_dict)
         elif any(k.startswith("lora_unet_") for k in state_dict):
             state_dict = _convert_musubi_wan_lora_to_diffusers(state_dict)
@@ -5247,6 +5248,7 @@ class WanLoraLoaderMixin(LoraBaseMixin):
 
         # First, ensure that the checkpoint is a compatible one and can be successfully loaded.
         kwargs["return_lora_metadata"] = True
+        print("WTF IS HAPENING")
         state_dict, metadata = self.lora_state_dict(pretrained_model_name_or_path_or_dict, **kwargs)
         # convert T2V LoRA to I2V LoRA (when loaded to Wan I2V) by adding zeros for the additional (missing) _img layers
         state_dict = self._maybe_expand_t2v_lora_for_i2v(
