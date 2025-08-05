@@ -1816,21 +1816,11 @@ def _convert_non_diffusers_lumina2_lora_to_diffusers(state_dict):
 
 def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
 
-    def get_alpha_scales(down_weight, alpha_key):
-        rank = down_weight.shape[0]
-        alpha = original_state_dict.pop(alpha_key).item()
-        scale = alpha / rank  # LoRA is scaled by 'alpha / rank' in forward pass, so we need to scale it back here
-        scale_down = scale
-        scale_up = 1.0
-        while scale_down * 2 < scale_up:
-            scale_down *= 2
-            scale_up /= 2
-        return scale_down, scale_up
-
     converted_state_dict = {}
-    original_state_dict = {k[len("diffusion_model.") :]: v for k, v in state_dict.items()}
-    if len(original_state_dict) == 0: #lightx2v wan 2.2
-        original_state_dict = {k: v for k, v in state_dict.items() if k.startswith("blocks.")}
+    if any(k.startswith("diffusion_model.") for k in state_dict):
+        original_state_dict = {k[len("diffusion_model.") :]: v for k, v in state_dict.items()}
+    else: #in lightx2v lora the prefix is "blocks.",nothing to remove
+        original_state_dict = state_dict
 
     block_numbers = {int(k.split(".")[1]) for k in original_state_dict if k.startswith("blocks.")}
     min_block = min(block_numbers)
@@ -1842,6 +1832,17 @@ def _convert_non_diffusers_wan_lora_to_diffusers(state_dict):
     has_time_projection_weight = any(
         k.startswith("time_projection") and k.endswith(".weight") for k in original_state_dict
     )
+
+    def get_alpha_scales(down_weight, alpha_key):
+        rank = down_weight.shape[0]
+        alpha = original_state_dict.pop(alpha_key).item()
+        scale = alpha / rank  # LoRA is scaled by 'alpha / rank' in forward pass, so we need to scale it back here
+        scale_down = scale
+        scale_up = 1.0
+        while scale_down * 2 < scale_up:
+            scale_down *= 2
+            scale_up /= 2
+        return scale_down, scale_up
 
 
     for key in list(original_state_dict.keys()):
