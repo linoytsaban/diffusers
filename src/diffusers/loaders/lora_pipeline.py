@@ -5154,7 +5154,7 @@ class WanLoraLoaderMixin(LoraBaseMixin):
             user_agent=user_agent,
             allow_pickle=allow_pickle,
         )
-        if any(k.startswith("diffusion_model.") for k in state_dict):
+        if any(k.startswith("diffusion_model.") for k in state_dict) or any(k.startswith("blocks.") for k in state_dict):
             state_dict = _convert_non_diffusers_wan_lora_to_diffusers(state_dict)
         elif any(k.startswith("lora_unet_") for k in state_dict):
             state_dict = _convert_musubi_wan_lora_to_diffusers(state_dict)
