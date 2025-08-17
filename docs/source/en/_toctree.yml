@@ -5,9 +5,9 @@
   - local: installation
     title: Installation
   - local: quicktour
-    title: Quicktour
+    title: Quickstart
   - local: stable_diffusion
-    title: Effective and efficient diffusion
+    title: Basic performance
 
 - title: DiffusionPipeline
   isExpanded: false
