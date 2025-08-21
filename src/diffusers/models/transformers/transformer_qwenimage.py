@@ -179,6 +179,8 @@ class QwenEmbedRope(nn.Module):
             dim=1,
         )
         self.rope_cache = {}
+        self.register_buffer("pos_freqs", pos_freqs, persistent=False)
+        self.register_buffer("neg_freqs", neg_freqs, persistent=False)
 
         # DO NOT USING REGISTER BUFFER HERE, IT WILL CAUSE COMPLEX NUMBERS LOSE ITS IMAGINARY PART
         self.scale_rope = scale_rope
