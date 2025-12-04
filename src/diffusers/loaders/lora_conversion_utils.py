@@ -2448,7 +2448,7 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
         for k in all_keys:
             #print("default" in k)
             if k.endswith(down_key):
-                print("k in pop", k)
+                #print("k in pop", k)
                 diffusers_down_key = k.replace(down_key, ".lora_A.weight")
                 diffusers_up_key = k.replace(down_key, up_key).replace(up_key, ".lora_B.weight")
                 alpha_key = k.replace(down_key, ".alpha")
@@ -2459,7 +2459,7 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
                 converted_state_dict[diffusers_down_key] = down_weight * scale_down
                 converted_state_dict[diffusers_up_key] = up_weight * scale_up
             else:
-                if "out" in k:
+                if "noise_refiner.0.attention.out" in k:
                     print("wtaf", k)
 
 
