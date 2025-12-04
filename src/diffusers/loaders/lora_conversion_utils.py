@@ -2445,7 +2445,7 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
             return scale_down, scale_up
 
         for k in all_keys:
-            print(k)
+            #print(k)
             if k.endswith(down_key):
                 diffusers_down_key = k.replace(down_key, ".lora_A.weight")
                 diffusers_up_key = k.replace(down_key, up_key).replace(up_key, ".lora_B.weight")
