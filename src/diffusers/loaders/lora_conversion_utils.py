@@ -2445,6 +2445,7 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
             return scale_down, scale_up
 
         for k in all_keys:
+            # print(k)
             if k.endswith(down_key):
                 diffusers_down_key = k.replace(down_key, ".lora_A.weight")
                 diffusers_up_key = k.replace(down_key, up_key).replace(up_key, ".lora_B.weight")
@@ -2455,7 +2456,8 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
                 scale_down, scale_up = get_alpha_scales(down_weight, alpha_key)
                 converted_state_dict[diffusers_down_key] = down_weight * scale_down
                 converted_state_dict[diffusers_up_key] = up_weight * scale_up
-
+            else:
+                print("k not in pop", k)
     # Already in diffusers format (lora_A/lora_B), just pop
     elif has_diffusers_lora_id:
         for k in all_keys:
