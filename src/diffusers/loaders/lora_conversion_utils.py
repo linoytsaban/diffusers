@@ -2418,13 +2418,9 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
         state_dict = {convert_key(k): v for k, v in state_dict.items()}
 
     has_default = any("default." in k for k in state_dict)
-    has_default_0 = any("default_0." in k for k in state_dict)
     if has_default:
-        print("has default(???????)")
         state_dict = {k.replace("default.", ""): v for k, v in state_dict.items()}
 
-    if has_default_0:
-        print("has default 000000(???????)")
     converted_state_dict = {}
     all_keys = list(state_dict.keys())
     down_key = ".lora_down.weight"
@@ -2462,7 +2458,7 @@ def _convert_non_diffusers_z_image_lora_to_diffusers(state_dict):
                 converted_state_dict[diffusers_down_key] = down_weight * scale_down
                 converted_state_dict[diffusers_up_key] = up_weight * scale_up
             else:
-                if not k.endswith(up_key) and (not k.endswith(".alpha")):
+                if "out" in k:
                     print("wtaf", k)
 
 
