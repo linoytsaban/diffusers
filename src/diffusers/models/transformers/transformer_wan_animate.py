@@ -445,10 +445,14 @@ class WanAnimateFaceBlockAttnProcessor:
         # B --> batch_size, T --> reduced inference segment len, N --> face_encoder_num_heads + 1, C --> attn.dim
         B, T, N, C = encoder_hidden_states.shape
 
+        # Flatten T and N so the K/V projections see a 3D tensor; BnB int8 matmul only
+        # accepts 2D/3D inputs and would otherwise fail on this 4D activation.
+        encoder_hidden_states = encoder_hidden_states.flatten(1, 2)  # [B, T, N, C] --> [B, T * N, C]
+
         query, key, value = _get_qkv_projections(attn, hidden_states, encoder_hidden_states)
 
         query = query.unflatten(2, (attn.heads, -1))  # [B, S, H * D] --> [B, S, H, D]
-        key = key.view(B, T, N, attn.heads, -1)  # [B, T, N, H * D_kv] --> [B, T, N, H, D_kv]
+        key = key.view(B, T, N, attn.heads, -1)  # [B, T * N, H * D_kv] --> [B, T, N, H, D_kv]
         value = value.view(B, T, N, attn.heads, -1)
 
         query = attn.norm_q(query)
@@ -1184,6 +1188,10 @@ class WanAnimateTransformer3DModel(
                 `self.config.motion_encoder_batch_size` if not set.
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether to return the output as a dict or tuple.
+            attention_kwargs (`dict`, *optional*):
+                A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
+                `self.processor` in
+                [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
         """
 
         # Check that shapes match up
